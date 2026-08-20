@@ -15,6 +15,103 @@ function setRunningUIState(isRunning) {
     }
 }
 
+const providerSelect = document.getElementById('providerSelect');
+const apiKeyLabel = document.getElementById('apiKeyLabel');
+const apiKeyInput = document.getElementById('apiKey');
+const modelGroup = document.getElementById('modelGroup');
+const modelInput = document.getElementById('modelInput');
+const endpointGroup = document.getElementById('endpointGroup');
+const endpointInput = document.getElementById('endpointInput');
+
+function updateProviderUI(provider) {
+    if (provider === 'openrouter') {
+        apiKeyLabel.innerText = "OpenRouter API Key";
+        apiKeyInput.placeholder = "sk-or-v1-...";
+        modelGroup.style.display = 'block';
+        if (!modelInput.value) modelInput.value = "meta-llama/llama-3.3-70b-instruct:free";
+        modelInput.placeholder = "e.g. meta-llama/llama-3.3-70b-instruct:free or google/gemini-2.0-flash-001";
+        endpointGroup.style.display = 'none';
+    } else if (provider === 'groq') {
+        apiKeyLabel.innerText = "Groq API Key";
+        apiKeyInput.placeholder = "gsk_...";
+        modelGroup.style.display = 'block';
+        if (!modelInput.value) modelInput.value = "llama-3.3-70b-versatile";
+        modelInput.placeholder = "e.g. llama-3.3-70b-versatile";
+        endpointGroup.style.display = 'none';
+    } else if (provider === 'custom') {
+        apiKeyLabel.innerText = "Custom API Key / Bearer Token";
+        apiKeyInput.placeholder = "API Key (leave blank if local/none)";
+        modelGroup.style.display = 'block';
+        modelInput.placeholder = "e.g. gpt-4o-mini, llama3, deepseek-chat";
+        endpointGroup.style.display = 'block';
+        if (!endpointInput.value) endpointInput.value = "http://localhost:11434/v1/chat/completions";
+        endpointInput.placeholder = "https://api.openai.com/v1/chat/completions";
+    } else {
+        // Gemini
+        apiKeyLabel.innerText = "Gemini API Key";
+        apiKeyInput.placeholder = "AIzaSy...";
+        modelGroup.style.display = 'none';
+        endpointGroup.style.display = 'none';
+    }
+}
+
+providerSelect.addEventListener('change', () => {
+    updateProviderUI(providerSelect.value);
+    saveSettings();
+});
+
+function saveSettings() {
+    chrome.storage.local.set({
+        aiProvider: providerSelect.value,
+        aiApiKey: apiKeyInput.value.trim(),
+        aiModel: modelInput.value.trim(),
+        aiEndpoint: endpointInput.value.trim(),
+        // Keep backwards compatibility
+        geminiApiKey: apiKeyInput.value.trim()
+    });
+}
+
+apiKeyInput.addEventListener('input', saveSettings);
+modelInput.addEventListener('input', saveSettings);
+endpointInput.addEventListener('input', saveSettings);
+
+// Load saved settings
+chrome.storage.local.get(['aiProvider', 'aiApiKey', 'aiModel', 'aiEndpoint', 'geminiApiKey'], (result) => {
+    if (result.aiProvider) {
+        providerSelect.value = result.aiProvider;
+    }
+    if (result.aiApiKey || result.geminiApiKey) {
+        apiKeyInput.value = result.aiApiKey || result.geminiApiKey;
+    }
+    if (result.aiModel) {
+        modelInput.value = result.aiModel;
+    }
+    if (result.aiEndpoint) {
+        endpointInput.value = result.aiEndpoint;
+    }
+    updateProviderUI(providerSelect.value);
+});
+
+function getAIConfig() {
+    const provider = providerSelect.value;
+    const key = apiKeyInput.value.trim();
+    const model = modelInput.value.trim();
+    let endpoint = endpointInput.value.trim();
+
+    if (provider === 'openrouter') {
+        endpoint = "https://openrouter.ai/api/v1/chat/completions";
+    } else if (provider === 'groq') {
+        endpoint = "https://api.groq.com/openai/v1/chat/completions";
+    }
+
+    return {
+        provider: provider,
+        apiKey: key,
+        model: model,
+        endpoint: endpoint
+    };
+}
+
 // Stop Button
 document.getElementById('stopBtn').addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -66,13 +163,6 @@ document.getElementById('readBtn').addEventListener('click', async () => {
     });
 });
 
-// Load saved key
-chrome.storage.local.get(['geminiApiKey'], (result) => {
-    if (result.geminiApiKey) {
-        document.getElementById('apiKey').value = result.geminiApiKey;
-    }
-});
-
 // Check for running process on load
 (async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -107,12 +197,12 @@ chrome.storage.local.get(['geminiApiKey'], (result) => {
 })();
 
 document.getElementById('quizBtn').addEventListener('click', async () => {
-    const apiKey = document.getElementById('apiKey').value.trim();
-    if (!apiKey) {
-        document.getElementById('status').innerText = "Enter Gemini API Key first!";
+    const config = getAIConfig();
+    if (!config.apiKey && config.provider !== 'custom') {
+        document.getElementById('status').innerText = `Enter ${config.provider} API Key first!`;
         return;
     }
-    chrome.storage.local.set({ geminiApiKey: apiKey });
+    saveSettings();
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
@@ -124,7 +214,11 @@ document.getElementById('quizBtn').addEventListener('click', async () => {
     setRunningUIState(true);
     document.getElementById('status').innerText = "Starting Quiz Solver...";
 
-    chrome.tabs.sendMessage(tab.id, { action: "start_quiz_solver", apiKey: apiKey }, (response) => {
+    chrome.tabs.sendMessage(tab.id, { 
+        action: "start_quiz_solver", 
+        apiKey: config.apiKey, 
+        aiConfig: config 
+    }, (response) => {
         if (chrome.runtime.lastError) {
             setRunningUIState(false);
             document.getElementById('status').innerText = "Error: Refresh page & try again.";
@@ -133,13 +227,13 @@ document.getElementById('quizBtn').addEventListener('click', async () => {
 });
 
 document.getElementById('completeBtn').addEventListener('click', async () => {
-    const apiKey = document.getElementById('apiKey').value.trim();
-    if (!apiKey) {
-        alert("Please enter a Gemini API Key first.");
+    const config = getAIConfig();
+    if (!config.apiKey && config.provider !== 'custom') {
+        alert(`Please enter a ${config.provider} API Key first.`);
         return;
     }
     
-    chrome.storage.local.set({ geminiApiKey: apiKey });
+    saveSettings();
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
@@ -151,7 +245,11 @@ document.getElementById('completeBtn').addEventListener('click', async () => {
     setRunningUIState(true);
     document.getElementById('status').innerText = "Starting Full Course Completion...";
 
-    chrome.tabs.sendMessage(tab.id, { action: "start_complete_course", apiKey: apiKey }, (response) => {
+    chrome.tabs.sendMessage(tab.id, { 
+        action: "start_complete_course", 
+        apiKey: config.apiKey, 
+        aiConfig: config 
+    }, (response) => {
         if (chrome.runtime.lastError) {
             setRunningUIState(false);
             document.getElementById('status').innerText = "Error: Refresh page & try again.";
@@ -192,4 +290,3 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         document.getElementById('status').innerText = "Process Finished!";
     }
 });
-

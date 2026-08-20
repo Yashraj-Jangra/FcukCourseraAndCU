@@ -2,58 +2,78 @@
 <html>
 <head>
   <style>
-    body { background-color: black; width: 300px; padding: 15px; font-family: sans-serif; }
-    button { width: 100%; padding: 10px; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 5px; border-radius: 4px; }
+    body { background-color: #121212; width: 320px; padding: 15px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #fff; margin: 0; box-sizing: border-box; }
+    button { width: 100%; padding: 10px; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 6px; border-radius: 6px; font-size: 12px; transition: opacity 0.2s; }
+    button:hover { opacity: 0.9; }
     
     .btn-blue { background-color: #0056D2; }
-    .btn-blue:hover { background-color: #00419e; }
-    
     .btn-green { background-color: #28a745; }
-    .btn-green:hover { background-color: #218838; }
-    
     .btn-purple { background-color: #6f42c1; }
-    .btn-purple:hover { background-color: #5a32a3; }
-    
     .btn-pink { background-color: #d63384; }
-    .btn-pink:hover { background-color: #c21b6c; }
-
     .btn-red { background-color: #dc3545; }
-    .btn-red:hover { background-color: #bd2130; }
 
-    button:disabled { background-color: #444 !important; cursor: not-allowed; color: #888; }
+    button:disabled { background-color: #333 !important; cursor: not-allowed; color: #777; opacity: 0.6; }
     
-    #status { margin-top: 10px; font-size: 12px; color: #9c9c9c; font-weight: 500; }
-    .log { max-height: 150px; overflow-y: auto; background: #1a1a1a; color: #e0e0e0; padding: 6px; margin-top: 10px; font-size: 10px; border: 1px solid #333; border-radius: 4px; line-height: 1.4; }
-    .log div { border-bottom: 1px solid #222; padding: 2px 0; }
+    .input-group { margin-bottom: 6px; }
+    .input-label { font-size: 11px; color: #aaa; margin-bottom: 3px; display: block; }
+    input, select { width: 100%; box-sizing: border-box; padding: 7px 9px; background: #1e1e1e; color: #fff; border: 1px solid #3d3d3d; border-radius: 5px; font-size: 11px; outline: none; }
+    input:focus, select:focus { border-color: #0056D2; }
+    
+    #status { margin-top: 10px; font-size: 12px; color: #aaa; font-weight: 500; text-align: center; }
+    .log { max-height: 140px; overflow-y: auto; background: #181818; color: #d0d0d0; padding: 8px; margin-top: 10px; font-size: 10px; border: 1px solid #2e2e2e; border-radius: 5px; line-height: 1.4; }
+    .log div { border-bottom: 1px solid #262626; padding: 2px 0; }
   </style>
 </head>
 <body>
-  <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 15px;">
-    <img src="icon.jpg" style="width: 40px; height: 40px; margin-right: 10px; border-radius: 50%;">
-    <h2 style="margin: 0; color: #0056D2;">FcukCoursera</h2>
+  <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 12px;">
+    <img src="icon.jpg" style="width: 36px; height: 36px; margin-right: 10px; border-radius: 50%; object-fit: cover;">
+    <h2 style="margin: 0; color: #0066FF; font-size: 18px;">FcukCoursera</h2>
   </div>
   
-  <p style="text-align: center; font-size: 12px; color: #aaa; margin-top: 0;">Navigate to a Course Home page and click Start.</p>
   <button id="startBtn" class="btn-blue">Skip All Videos</button>
   <button id="readBtn" class="btn-green">Skip All Readings</button>
-  <div style="margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;">
-    <input type="password" id="apiKey" placeholder="Gemini API Key" style="width: 100%; box-sizing: border-box; margin-bottom: 5px; padding: 6px; background: #222; color: #fff; border: 1px solid #444; border-radius: 4px;">
-    <button id="quizBtn" class="btn-purple">Solve Quizzes (Beta)</button>
-    <button id="completeBtn" class="btn-pink">Complete Course (Beta)</button>
+
+  <div style="margin-top: 12px; border-top: 1px solid #2a2a2a; padding-top: 10px;">
+    <div class="input-group">
+      <label class="input-label" for="providerSelect">AI Provider</label>
+      <select id="providerSelect">
+        <option value="gemini">Google Gemini (Default)</option>
+        <option value="openrouter">OpenRouter (Free & Paid)</option>
+        <option value="groq">Groq (Ultra-Fast)</option>
+        <option value="custom">Custom OpenAI-Compatible / Local</option>
+      </select>
+    </div>
+
+    <div class="input-group">
+      <label class="input-label" for="apiKey" id="apiKeyLabel">Gemini API Key</label>
+      <input type="password" id="apiKey" placeholder="Paste API Key here...">
+    </div>
+
+    <div class="input-group" id="modelGroup" style="display: none;">
+      <label class="input-label" for="modelInput">Model Name</label>
+      <input type="text" id="modelInput" placeholder="meta-llama/llama-3.3-70b-instruct:free">
+    </div>
+
+    <div class="input-group" id="endpointGroup" style="display: none;">
+      <label class="input-label" for="endpointInput">Custom API Endpoint URL</label>
+      <input type="text" id="endpointInput" placeholder="https://api.openai.com/v1/chat/completions">
+    </div>
+
+    <button id="quizBtn" class="btn-purple">Solve Quizzes (AI)</button>
+    <button id="completeBtn" class="btn-pink">Complete Course (All-in-One)</button>
     <button id="stopBtn" class="btn-red" style="display: none;">Stop Process</button>
   </div>
   
-  <div id="progressContainer" style="margin-top: 10px; background-color: #333; border-radius: 4px; height: 10px; display: none;">
+  <div id="progressContainer" style="margin-top: 10px; background-color: #262626; border-radius: 4px; height: 8px; display: none;">
     <div id="progressBar" style="background-color: #28a745; height: 100%; width: 0%; border-radius: 4px; transition: width 0.3s;"></div>
   </div>
-  <div id="progressText" style="color: white; text-align: center; font-size: 10px; margin-top: 2px; display: none;">0%</div>
+  <div id="progressText" style="color: #bbb; text-align: center; font-size: 10px; margin-top: 3px; display: none;">0%</div>
 
   <div id="status">Ready</div>
   <div id="log" class="log"></div>
-  <div style="text-align: center; margin-top: 10px; font-size: 10px; color: #888;">
+  <div style="text-align: center; margin-top: 10px; font-size: 10px; color: #666;">
     Made by Sookeyy
   </div>
   <script src="popup.js"></script>
 </body>
 </html>
-

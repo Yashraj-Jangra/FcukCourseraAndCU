@@ -84,7 +84,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         globalState.isRunning = true;
         globalState.abortRequested = false;
         globalState.currentAction = "quiz";
-        startQuizSolverProcess(request.apiKey).finally(() => { 
+        const aiConfig = request.aiConfig || request.apiKey;
+        startQuizSolverProcess(aiConfig).finally(() => { 
             globalState.isRunning = false;
             globalState.abortRequested = false;
         });
@@ -98,7 +99,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         globalState.isRunning = true;
         globalState.abortRequested = false;
         globalState.currentAction = "complete";
-        startCompleteCourseProcess(request.apiKey).finally(() => { 
+        const aiConfig = request.aiConfig || request.apiKey;
+        startCompleteCourseProcess(aiConfig).finally(() => { 
             globalState.isRunning = false;
             globalState.abortRequested = false;
         });
@@ -106,7 +108,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
-async function startCompleteCourseProcess(apiKey) {
+async function startCompleteCourseProcess(aiConfig) {
     try {
         const { userId, courseId, courseSlug, allItems } = await getCourseData();
         
@@ -139,7 +141,7 @@ async function startCompleteCourseProcess(apiKey) {
                 }
                 else if (['exam', 'gradedQuiz', 'quiz', 'ungradedWidget', 'ungradedAssignment'].includes(item.typeName)) {
                     log(`[Quiz Found] ${item.name}`);
-                    await processQuizItem(userId, courseId, item, apiKey);
+                    await processQuizItem(userId, courseId, item, aiConfig);
                     result = true;
                 }
                 else {
@@ -492,7 +494,7 @@ async function completeSingleReading(userId, courseId, courseSlug, itemId) {
     }
 }
 
-async function startQuizSolverProcess(apiKey) {
+async function startQuizSolverProcess(aiConfig) {
     try {
         const { userId, courseId, courseSlug, allItems } = await getCourseData();
         
@@ -519,7 +521,7 @@ async function startQuizSolverProcess(apiKey) {
 
             // Attempt to retrieve questions
             try {
-                await processQuizItem(userId, courseId, item, apiKey);
+                await processQuizItem(userId, courseId, item, aiConfig);
             } catch (err) {
                 log(`Failed to process quiz ${item.name}: ${err.message}`);
             }
@@ -539,7 +541,7 @@ async function startQuizSolverProcess(apiKey) {
     }
 }
 
-async function processQuizItem(userId, courseId, item, apiKey) {
+async function processQuizItem(userId, courseId, item, aiConfig) {
     log(`Processing ${item.name} (${item.typeName})...`);
     
     if (item.contentSummary) {
@@ -550,15 +552,15 @@ async function processQuizItem(userId, courseId, item, apiKey) {
     const examTypes = ['exam', 'gradedQuiz'];
     
     if (examTypes.includes(item.typeName)) {
-        await processExamItem(userId, courseId, item, apiKey);
+        await processExamItem(userId, courseId, item, aiConfig);
     } else if (item.typeName === 'ungradedAssignment') {
-        await processUngradedAssignment(userId, courseId, item, apiKey);
+        await processUngradedAssignment(userId, courseId, item, aiConfig);
     } else {
         log(`Skipping ${item.typeName} - Not a standard exam type.`);
     }
 }
 
-async function processUngradedAssignment(userId, courseId, item, apiKey) {
+async function processUngradedAssignment(userId, courseId, item, aiConfig) {
     log(`Attempting to process Ungraded Assignment: ${item.name}`);
 
     // Strategy: Use GraphQL Submission_StartAttempt
@@ -1593,7 +1595,7 @@ fragment TextBlock on Submission_TextBlock {
                 };
             }).filter(q => q !== null); // Filter out nulls (TextBlocks)
 
-            await solveQuestions('graphql', courseId, itemId, questions, headers, apiKey);
+            await solveQuestions('graphql', courseId, itemId, questions, headers, aiConfig);
 
         } else {
             log("No in-progress attempt found. You might need to start it manually once.");
@@ -1604,7 +1606,7 @@ fragment TextBlock on Submission_TextBlock {
     }
 }
 
-async function processSession(endpoint, sessionId, headers, apiKey) {
+async function processSession(endpoint, sessionId, headers, aiConfig) {
     // Generic function to handle session state and solving
     try {
         const actionUrl = `https://www.coursera.org/api/${endpoint}/${sessionId}/actions?includes=gradingAttempts`;
@@ -1640,7 +1642,7 @@ async function processSession(endpoint, sessionId, headers, apiKey) {
 
         if (questions && questions.length > 0) {
             log(`Found ${questions.length} questions!`);
-            await solveQuestions(endpoint, sessionId, questions, headers, apiKey);
+            await solveQuestions(endpoint, sessionId, sessionId, questions, headers, aiConfig);
         } else {
             log("No questions found in session state.");
             log("State Data: " + JSON.stringify(actionData).substring(0, 200));
@@ -1650,7 +1652,7 @@ async function processSession(endpoint, sessionId, headers, apiKey) {
     }
 }
 
-async function solveQuestions(endpoint, courseId, itemId, questions, headers, apiKey) {
+async function solveQuestions(endpoint, courseId, itemId, questions, headers, aiConfig) {
     log(`Starting solver for ${questions.length} question(s)...`);
     
     const responsesToSave = [];
@@ -1708,15 +1710,16 @@ Reply ONLY with the correct option number(s) in this format: "Option 1" or "Opti
 Do not output anything else.`;
             }
 
-            log(`Asking Gemini AI for question (${q.type || 'Question'})...`);
-            const answerText = await callGemini(apiKey, prompt);
+            const providerLabel = (typeof aiConfig === 'object' && aiConfig?.provider) ? aiConfig.provider.toUpperCase() : 'AI';
+            log(`Asking ${providerLabel} for question (${q.type || 'Question'})...`);
+            const answerText = await callLLM(prompt, aiConfig);
 
             if (!answerText) {
-                log(`Warning: Could not obtain answer from Gemini for question ${q.id}. Skipping.`);
+                log(`Warning: Could not obtain answer from ${providerLabel} for question ${q.id}. Skipping.`);
                 continue;
             }
 
-            log(`Gemini response: ${answerText}`);
+            log(`${providerLabel} response: ${answerText}`);
 
             if (isText) {
                 let questionTypeEnum = 'PLAIN_TEXT';
@@ -2001,7 +2004,7 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
     }
 }
 
-async function processExamItem(userId, courseId, item, apiKey) {
+async function processExamItem(userId, courseId, item, aiConfig) {
     try {
         log(`Attempting to start exam session for ${item.name}...`);
         
@@ -2048,7 +2051,7 @@ async function processExamItem(userId, courseId, item, apiKey) {
         }
         
         log(`Session Started! Session ID: ${sessionId}`);
-        await processSession('onDemandExamSessions.v1', sessionId, headers, apiKey);
+        await processSession('onDemandExamSessions.v1', sessionId, headers, aiConfig);
 
     } catch (e) {
         log(`Error processing exam: ${e.message}`);
@@ -2058,16 +2061,14 @@ async function processExamItem(userId, courseId, item, apiKey) {
 // Dynamic Gemini Model Discovery & Cache
 let cachedAvailableModels = null;
 
-// Keywords that indicate a specialty model that does NOT support standard text generateContent
 const EXCLUDED_MODEL_KEYWORDS = ['tts', 'image', 'vision', 'embedding', 'aqa', 'retrieval', 'semantic'];
 
-// Strict preference order for text generation models
 const PREFERRED_TEXT_MODELS = [
-    'gemini-2.5-flash-lite',   // Lowest quota pressure, good for free tier
-    'gemini-2.5-flash',        // Fast and capable
-    'gemini-2.5-pro',          // High quality fallback
-    'gemini-2.0-flash',        // Legacy fallback
-    'gemini-1.5-flash'         // Last resort
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash'
 ];
 
 async function getAvailableGeminiModels(apiKey) {
@@ -2082,21 +2083,17 @@ async function getAvailableGeminiModels(apiKey) {
             const data = await resp.json();
             if (data.models && Array.isArray(data.models)) {
                 const textModels = data.models
-                    // Must support generateContent
                     .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
                     .map(m => m.name.replace('models/', ''))
-                    // Exclude specialty non-text models (TTS, image, embedding, etc.)
                     .filter(name => !EXCLUDED_MODEL_KEYWORDS.some(kw => name.toLowerCase().includes(kw)));
 
                 if (textModels.length > 0) {
-                    // Sort by preference order
                     textModels.sort((a, b) => {
                         const aPref = PREFERRED_TEXT_MODELS.findIndex(p => a === p || a.startsWith(p));
                         const bPref = PREFERRED_TEXT_MODELS.findIndex(p => b === p || b.startsWith(p));
                         if (aPref !== -1 && bPref !== -1) return aPref - bPref;
                         if (aPref !== -1) return -1;
                         if (bPref !== -1) return 1;
-                        // Prefer flash over pro for speed
                         if (a.includes('flash') && !b.includes('flash')) return -1;
                         if (!a.includes('flash') && b.includes('flash')) return 1;
                         return 0;
@@ -2114,6 +2111,96 @@ async function getAvailableGeminiModels(apiKey) {
 
     cachedAvailableModels = PREFERRED_TEXT_MODELS;
     return cachedAvailableModels;
+}
+
+/**
+ * Calls OpenAI-Compatible Endpoints (OpenRouter, Groq, Local Ollama, DeepSeek, etc.)
+ */
+async function callOpenAICompatible(prompt, config, maxRetries = 3) {
+    const provider = config.provider || 'custom';
+    const apiKey = config.apiKey || '';
+    let endpoint = config.endpoint;
+    let model = config.model;
+
+    if (provider === 'openrouter') {
+        endpoint = endpoint || 'https://openrouter.ai/api/v1/chat/completions';
+        model = model || 'meta-llama/llama-3.3-70b-instruct:free';
+    } else if (provider === 'groq') {
+        endpoint = endpoint || 'https://api.groq.com/openai/v1/chat/completions';
+        model = model || 'llama-3.3-70b-versatile';
+    } else {
+        endpoint = endpoint || 'http://localhost:11434/v1/chat/completions';
+        model = model || 'gpt-4o-mini';
+    }
+
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+    if (apiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+    if (provider === 'openrouter') {
+        headers['HTTP-Referer'] = 'https://coursera.org';
+        headers['X-Title'] = 'FcukCoursera';
+    }
+
+    const body = JSON.stringify({
+        model: model,
+        messages: [
+            {
+                role: 'user',
+                content: prompt
+            }
+        ],
+        temperature: 0.1,
+        max_tokens: 1024
+    });
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (globalState.abortRequested) return null;
+
+        try {
+            const resp = await fetch(endpoint, {
+                method: 'POST',
+                headers: headers,
+                body: body
+            });
+
+            if (resp.ok) {
+                const data = await resp.json();
+                const content = data.choices?.[0]?.message?.content;
+                if (content) {
+                    return content.trim();
+                }
+                log(`[${provider}] Warning: Empty response from model.`);
+                return null;
+            }
+
+            if (resp.status === 429 || resp.status === 503 || resp.status === 500) {
+                const backoffMs = (attempt + 1) * 3000;
+                const errType = resp.status === 429 ? "Rate limited (429)" : `Server error (${resp.status})`;
+                if (attempt < maxRetries) {
+                    log(`[${provider}/${model}] ${errType} - Retrying in ${(backoffMs / 1000).toFixed(1)}s (Attempt ${attempt + 1}/${maxRetries})...`);
+                    await new Promise(r => setTimeout(r, backoffMs));
+                    continue;
+                }
+            }
+
+            const errText = await resp.text();
+            log(`[${provider}/${model}] Error ${resp.status}: ${errText.substring(0, 120)}`);
+            return null;
+
+        } catch (netErr) {
+            log(`[${provider}/${model}] Network error: ${netErr.message}`);
+            if (attempt < maxRetries) {
+                await new Promise(r => setTimeout(r, 2000));
+                continue;
+            }
+            return null;
+        }
+    }
+
+    return null;
 }
 
 /**
@@ -2205,5 +2292,25 @@ async function callGemini(apiKey, prompt, maxRetries = 3) {
     log("Error: All Gemini models failed or rate limit quota exceeded.");
     return null;
 }
+
+/**
+ * Universal LLM dispatcher:
+ * - Directs to OpenAI-compatible provider (OpenRouter, Groq, Custom/Local) or Gemini
+ */
+async function callLLM(prompt, aiConfig) {
+    let config = aiConfig;
+    if (typeof aiConfig === 'string') {
+        config = { provider: 'gemini', apiKey: aiConfig };
+    } else if (!config) {
+        config = { provider: 'gemini', apiKey: '' };
+    }
+
+    if (config.provider === 'openrouter' || config.provider === 'groq' || config.provider === 'custom') {
+        return await callOpenAICompatible(prompt, config);
+    } else {
+        return await callGemini(config.apiKey, prompt);
+    }
+}
+
 
 

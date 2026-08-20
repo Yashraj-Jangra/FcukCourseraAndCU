@@ -560,6 +560,31 @@ async function completeSingleReading(userId, courseId, courseSlug, itemId) {
     }
 }
 
+/**
+ * Strips any robotic AI disclaimers, preambles, conversational fluff, or quotes
+ * to ensure student submissions look 100% human and authentic.
+ */
+function sanitizeHumanStudentResponse(rawText) {
+    if (!rawText || typeof rawText !== 'string') return "";
+    
+    let text = rawText.trim();
+    
+    // Remove outer quotation marks if wrapped in quotes
+    if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+        text = text.slice(1, -1).trim();
+    }
+    
+    // Remove AI conversational prefixes
+    text = text.replace(/^(as an ai|as a language model|as an artificial intelligence|i am an ai|i am a large language model)[^,\.\n]*[,\.\n]\s*/gi, '');
+    text = text.replace(/^(certainly|sure thing|sure|here is|here's|below is|my response is)[^:\n]*[:\n]\s*/gi, '');
+    text = text.replace(/^(in response to the prompt|based on the course materials|as a student enrolled in this course)[,:\n]\s*/gi, '');
+    
+    // Remove AI trailing disclaimers
+    text = text.replace(/(i hope this helps|let me know if you need anything else|feel free to ask|as an ai language model).*$/gi, '').trim();
+
+    return text;
+}
+
 async function completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig, courseContext = null) {
     try {
         log(`Processing Discussion Prompt: ${item.name}...`);
@@ -589,25 +614,28 @@ async function completeDiscussionPrompt(userId, courseId, courseSlug, item, aiCo
             }
         } catch(e) {}
 
-        // 2. Generate course-aware discussion response with AI
+        // 2. Generate human student discussion response with AI
         let responseBodyText = "In my analysis of this topic, applying structured methodologies and evaluating practical outcomes leads to the most robust and sustainable results.";
         
         if (aiConfig) {
             try {
                 const courseInfo = courseContext?.courseTitle ? `Course: ${courseContext.courseTitle}\nTopic: ${courseContext.assignmentName || item.name}\n` : `Topic: ${item.name}\n`;
-                const aiPrompt = `You are an active, insightful student participating in a Coursera discussion forum.
+                const aiPrompt = `You are a human student enrolled in the Coursera course: "${courseContext?.courseTitle || 'this course'}".
 
 ${courseInfo}
 Discussion Prompt:
 "${promptText}"
 
-Instructions:
-Write a thoughtful, direct 2-3 sentence contribution specifically tailored to the topic and concepts of ${courseContext?.courseTitle || 'this course'}.
-Do not include quotation marks or conversational preambles. Output only the response text.`;
+Strict Safety & Style Guidelines:
+- Write a genuine, thoughtful 2-3 sentence contribution in the first person (e.g., "In my experience...", "I found that...").
+- NEVER mention or imply that you are an AI, language model, assistant, or automated system.
+- Do NOT use conversational preambles (e.g. "Here is my response:", "Sure!").
+- Do NOT enclose the entire output in quotation marks.
+- Output ONLY the final response text.`;
 
                 const aiResponse = await callLLM(aiPrompt, aiConfig);
                 if (aiResponse && aiResponse.trim().length > 10) {
-                    responseBodyText = aiResponse.trim();
+                    responseBodyText = sanitizeHumanStudentResponse(aiResponse);
                 }
             } catch(aiErr) {
                 log(`AI generation notice: ${aiErr.message}`);
@@ -1997,9 +2025,10 @@ ${courseHeader}
 Question:
 ${q.prompt?.text || "No question prompt available"}
 
-Instructions:
-Provide a direct, concise, and accurate answer strictly based on the conventions, terminology, and tools taught in this specific course.
-Do not include any conversational preamble, quotes, or explanations. Output ONLY the answer itself.`;
+Strict Safety & Style Guidelines:
+- Provide a direct, concise, and accurate answer strictly based on the conventions, terminology, and tools taught in this specific course.
+- NEVER disclose, mention, or imply that you are an AI, language model, assistant, or automated system.
+- Do NOT include any conversational preamble, quotes, or explanations. Output ONLY the answer text.`;
             } else if (isNumeric) {
                 prompt = `You are solving a numerical calculation question in a Coursera course.
 
@@ -2007,9 +2036,9 @@ ${courseHeader}
 Question:
 ${q.prompt?.text || "No question prompt available"}
 
-Instructions:
-Calculate the answer accurately according to the methods taught in this course.
-Provide ONLY the final number (e.g. 42 or 3.14). Do not include words or units unless explicitly specified in the question.`;
+Strict Safety & Style Guidelines:
+- Calculate the answer accurately according to the methods taught in this course.
+- Provide ONLY the final numeric value (e.g. 42 or 3.14). Do not include words, units, or AI commentary unless explicitly specified in the question.`;
             } else {
                 // MCQ / Checkbox
                 const optionsList = (q.options || []).map((o, index) => `Option ${index + 1} (${String.fromCharCode(65 + index)}): ${o.text}`).join('\n');
@@ -2024,22 +2053,23 @@ ${q.prompt?.text || "No question prompt available"}
 Options:
 ${optionsList}
 
-Instructions:
-${multiNote}
-Base your answer on the curriculum, definitions, and official conventions taught in this specific course.
-Reply ONLY with the correct option number(s) in this format: "Option 1" or "Option 1, Option 3".
-Do not output anything else.`;
+Strict Safety & Style Guidelines:
+- ${multiNote}
+- Base your answer on the curriculum, definitions, and official conventions taught in this specific course.
+- Reply ONLY with the correct option number(s) in this format: "Option 1" or "Option 1, Option 3".
+- Do not output anything else.`;
             }
 
             const providerLabel = (typeof aiConfig === 'object' && aiConfig?.provider) ? aiConfig.provider.toUpperCase() : 'AI';
             log(`Asking ${providerLabel} for question (${q.type || 'Question'})...`);
-            const answerText = await callLLM(prompt, aiConfig);
+            const rawAnswer = await callLLM(prompt, aiConfig);
 
-            if (!answerText) {
+            if (!rawAnswer) {
                 log(`Warning: Could not obtain answer from ${providerLabel} for question ${q.id}. Skipping.`);
                 continue;
             }
 
+            const answerText = isText ? sanitizeHumanStudentResponse(rawAnswer) : rawAnswer;
             log(`${providerLabel} response: ${answerText}`);
 
             if (isText) {

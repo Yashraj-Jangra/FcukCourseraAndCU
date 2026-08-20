@@ -3,6 +3,9 @@
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:
+- 🧠 **Added Course-Aware & Assignment-Context-Aware AI Prompting**:
+  - Injects `courseTitle`, `courseSlug`, `moduleName`, and current `assignmentName` directly into quiz question prompts and discussion prompts.
+  - LLM receives full course domain context to ground its answers in the exact conventions, libraries, formulas, and terminology taught in that specific course.
 - 🐛 **Fixed ReferenceError in `processGraphQLSession`**:
   - Replaced lingering `apiKey` parameter with unified `aiConfig` object in `processGraphQLSession` call and definition.
 - 🎨 **Enhanced Console Log Viewer & Visual Feedback**:

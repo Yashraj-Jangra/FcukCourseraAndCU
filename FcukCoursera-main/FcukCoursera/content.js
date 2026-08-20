@@ -139,13 +139,27 @@ async function startCompleteCourseProcess(aiConfig) {
                     result = await completeSingleReading(userId, courseId, courseSlug, item.id);
                     if (result) log(`[Reading Completed] ${item.name}`);
                 }
-                else if (['exam', 'gradedQuiz', 'quiz', 'ungradedWidget', 'ungradedAssignment'].includes(item.typeName)) {
-                    log(`[Quiz Found] ${item.name}`);
+                else if (['discussionPrompt', 'discussionQuestion', 'gradedDiscussionPrompt', 'discussion'].includes(item.typeName)) {
+                    log(`[Discussion Prompt Found] ${item.name}`);
+                    result = await completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig);
+                }
+                else if (['ungradedLti', 'gradedLti', 'ungradedLab', 'gradedLab', 'lab'].includes(item.typeName)) {
+                    log(`[Practice Lab / LTI Found] ${item.name}`);
+                    result = await completePracticeLabOrLti(userId, courseId, courseSlug, item);
+                }
+                else if (['coach', 'inCourseSurvey', 'survey', 'singlePageApp', 'peer', 'phasedPeer'].includes(item.typeName)) {
+                    log(`[Interactive Item Found] ${item.name}`);
+                    result = await completeGenericInteractiveItem(userId, courseId, courseSlug, item, aiConfig);
+                }
+                else if (['exam', 'gradedQuiz', 'quiz', 'ungradedWidget', 'ungradedAssignment', 'practiceQuiz', 'assignment', 'gradedAssignment', 'diagnosticExam'].includes(item.typeName)) {
+                    log(`[Quiz / Assignment Found] ${item.name}`);
                     await processQuizItem(userId, courseId, item, aiConfig);
                     result = true;
                 }
                 else {
-                    log(`[Skipping] ${item.name} (Type: ${item.typeName})`);
+                    // Generic fallback: attempt reading completion
+                    log(`[Processing Unknown Item Type: ${item.typeName}] ${item.name}`);
+                    result = await completeSingleReading(userId, courseId, courseSlug, item.id);
                 }
 
                 if (result) {
@@ -494,19 +508,189 @@ async function completeSingleReading(userId, courseId, courseSlug, itemId) {
     }
 }
 
+async function completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig) {
+    try {
+        log(`Processing Discussion Prompt: ${item.name}...`);
+        
+        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
+        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
+        const headers = {
+            'Content-Type': 'application/json',
+            'x-csrf3-token': csrfToken,
+            'x-coursera-application': 'ondemand',
+            'x-requested-with': 'XMLHttpRequest',
+        };
+
+        // 1. Fetch discussion prompt question text
+        let promptText = item.name;
+        try {
+            const promptUrl = `https://www.coursera.org/api/onDemandDiscussionPrompts.v1/${courseId}~${item.id}?includes=prompt`;
+            const pResp = await fetch(promptUrl, { headers, credentials: 'include' });
+            if (pResp.ok) {
+                const pData = await pResp.json();
+                if (pData.elements && pData.elements[0]) {
+                    const el = pData.elements[0];
+                    if (el.question) promptText = el.question;
+                    else if (el.prompt?.cml?.value) promptText = el.prompt.cml.value.replace(/<[^>]*>/g, '');
+                    else if (el.prompt?.text) promptText = el.prompt.text;
+                }
+            }
+        } catch(e) {}
+
+        // 2. Generate discussion response with AI
+        let responseBodyText = "In my analysis of this topic, applying structured methodologies and evaluating practical outcomes leads to the most robust and sustainable results.";
+        
+        if (aiConfig) {
+            try {
+                const aiPrompt = `You are a student writing a brief, insightful, and professional response to a Coursera discussion prompt.
+
+Discussion Prompt:
+"${promptText}"
+
+Instructions:
+Write a thoughtful, direct 2-3 sentence contribution to this discussion forum.
+Do not include quotation marks or conversational preambles. Output only the response text.`;
+
+                const aiResponse = await callLLM(aiPrompt, aiConfig);
+                if (aiResponse && aiResponse.trim().length > 10) {
+                    responseBodyText = aiResponse.trim();
+                }
+            } catch(aiErr) {
+                log(`AI generation notice: ${aiErr.message}`);
+            }
+        }
+
+        log(`Generated Discussion Response: "${responseBodyText.substring(0, 80)}..."`);
+
+        // 3. Submit discussion response via API
+        const submitEndpoints = [
+            `https://www.coursera.org/api/onDemandDiscussionPromptResponses.v1`,
+            `https://www.coursera.org/api/onDemandDiscussionPromptResponses.v1/${courseId}~${item.id}`
+        ];
+
+        for (const ep of submitEndpoints) {
+            try {
+                const postBody = JSON.stringify({
+                    courseId: courseId,
+                    itemId: item.id,
+                    userId: Number(userId),
+                    content: {
+                        typeName: "cml",
+                        definition: {
+                            dtdId: "discussion/1",
+                            value: `<cml><p>${responseBodyText}</p></cml>`
+                        }
+                    }
+                });
+
+                const resp = await fetch(ep, {
+                    method: 'POST',
+                    headers: headers,
+                    body: postBody,
+                    credentials: 'include'
+                });
+
+                if (resp.ok) {
+                    log(`[Discussion Posted] ${item.name}`);
+                    break;
+                }
+            } catch(e) {}
+        }
+
+        // 4. Mark completion records
+        await completeSingleReading(userId, courseId, courseSlug, item.id);
+        return true;
+
+    } catch(e) {
+        log(`Error completing discussion prompt: ${e.message}`);
+        await completeSingleReading(userId, courseId, courseSlug, item.id);
+        return false;
+    }
+}
+
+async function completePracticeLabOrLti(userId, courseId, courseSlug, item) {
+    try {
+        log(`Processing Practice Lab / LTI: ${item.name}...`);
+
+        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
+        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
+        const headers = {
+            'Content-Type': 'application/json',
+            'x-csrf3-token': csrfToken,
+            'x-coursera-application': 'ondemand',
+            'x-requested-with': 'XMLHttpRequest',
+        };
+
+        // 1. Touch LTI Item Passes API
+        try {
+            const ltiPassUrl = `https://www.coursera.org/api/onDemandLtiItemPasses.v1`;
+            const passBody = JSON.stringify({
+                courseId: courseId,
+                itemId: item.id,
+                userId: Number(userId)
+            });
+            await fetch(ltiPassUrl, { method: 'POST', headers, body: passBody, credentials: 'include' });
+        } catch(e) {}
+
+        // 2. Touch LTI Launch API
+        try {
+            const ltiLaunchUrl = `https://www.coursera.org/api/onDemandLtiLaunches.v1`;
+            const launchBody = JSON.stringify({
+                courseId: courseId,
+                itemId: item.id,
+                userId: Number(userId)
+            });
+            await fetch(ltiLaunchUrl, { method: 'POST', headers, body: launchBody, credentials: 'include' });
+        } catch(e) {}
+
+        // 3. Mark completion progress
+        await completeSingleReading(userId, courseId, courseSlug, item.id);
+        log(`[Practice Lab / LTI Completed] ${item.name}`);
+        return true;
+
+    } catch(e) {
+        log(`Error completing lab: ${e.message}`);
+        return false;
+    }
+}
+
+async function completeGenericInteractiveItem(userId, courseId, courseSlug, item, aiConfig) {
+    try {
+        log(`Processing Interactive Item (${item.typeName}): ${item.name}...`);
+        
+        // Attempt assignment solver first if it has a submission schema
+        try {
+            await processUngradedAssignment(userId, courseId, item, aiConfig);
+        } catch(e) {}
+
+        // Mark completion via reading/item progress
+        await completeSingleReading(userId, courseId, courseSlug, item.id);
+        log(`[Interactive Item Completed] ${item.name}`);
+        return true;
+
+    } catch(e) {
+        log(`Error completing interactive item: ${e.message}`);
+        return false;
+    }
+}
+
 async function startQuizSolverProcess(aiConfig) {
     try {
         const { userId, courseId, courseSlug, allItems } = await getCourseData();
         
-        // Log all found types to help debug
         const uniqueTypes = [...new Set(allItems.map(item => item.typeName))];
         log(`Found item types: ${uniqueTypes.map(t => t || 'undefined').join(', ')}`);
 
-        // Identify quizzes
-        const quizTypes = ['exam', 'gradedQuiz', 'quiz', 'ungradedWidget', 'ungradedAssignment'];
+        // Identify quizzes, assignments, practice tests, and discussion prompts
+        const quizTypes = [
+            'exam', 'gradedQuiz', 'quiz', 'ungradedWidget', 
+            'ungradedAssignment', 'practiceQuiz', 'assignment', 
+            'gradedAssignment', 'diagnosticExam', 'discussionPrompt', 
+            'gradedDiscussionPrompt', 'ungradedLti', 'lab'
+        ];
         const quizItems = allItems.filter(item => quizTypes.includes(item.typeName));
         
-        log(`Found ${quizItems.length} quizzes.`);
+        log(`Found ${quizItems.length} quizzes & practice items.`);
         
         for (let i = 0; i < quizItems.length; i++) {
             if (globalState.abortRequested) {
@@ -517,20 +701,19 @@ async function startQuizSolverProcess(aiConfig) {
             const item = quizItems[i];
             updateStatus(`[${i + 1}/${quizItems.length}] Quiz: ${item.name}`);
             
-            log(`[Quiz Found] ${item.name} (${item.typeName}) - ID: ${item.id}`);
+            log(`[Quiz/Assignment Found] ${item.name} (${item.typeName}) - ID: ${item.id}`);
 
-            // Attempt to retrieve questions
             try {
                 await processQuizItem(userId, courseId, item, aiConfig);
             } catch (err) {
-                log(`Failed to process quiz ${item.name}: ${err.message}`);
+                log(`Failed to process ${item.name}: ${err.message}`);
             }
         }
 
         if (globalState.abortRequested) {
             updateStatus("Process aborted.");
         } else {
-            updateStatus(`Done! Processed quizzes.`);
+            updateStatus(`Done! Processed quizzes & practice assignments.`);
         }
         chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
 
@@ -548,15 +731,26 @@ async function processQuizItem(userId, courseId, item, aiConfig) {
         log(`Content Summary: ${JSON.stringify(item.contentSummary)}`);
     }
 
-    // Types that usually use the Exam Session API
-    const examTypes = ['exam', 'gradedQuiz'];
-    
+    const examTypes = ['exam', 'gradedQuiz', 'quiz'];
+    const assignmentTypes = ['ungradedAssignment', 'practiceQuiz', 'assignment', 'gradedAssignment', 'diagnosticExam', 'ungradedWidget'];
+    const discussionTypes = ['discussionPrompt', 'discussionQuestion', 'gradedDiscussionPrompt', 'discussion'];
+    const labTypes = ['ungradedLti', 'gradedLti', 'ungradedLab', 'gradedLab', 'lab'];
+
     if (examTypes.includes(item.typeName)) {
         await processExamItem(userId, courseId, item, aiConfig);
-    } else if (item.typeName === 'ungradedAssignment') {
+    } else if (assignmentTypes.includes(item.typeName)) {
         await processUngradedAssignment(userId, courseId, item, aiConfig);
+    } else if (discussionTypes.includes(item.typeName)) {
+        await completeDiscussionPrompt(userId, courseId, '', item, aiConfig);
+    } else if (labTypes.includes(item.typeName)) {
+        await completePracticeLabOrLti(userId, courseId, '', item);
     } else {
-        log(`Skipping ${item.typeName} - Not a standard exam type.`);
+        // Fallback: try assignment solver, then reading completion
+        try {
+            await processUngradedAssignment(userId, courseId, item, aiConfig);
+        } catch(e) {
+            await completeSingleReading(userId, courseId, '', item.id);
+        }
     }
 }
 

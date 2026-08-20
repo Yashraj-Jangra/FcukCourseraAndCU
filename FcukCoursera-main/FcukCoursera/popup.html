@@ -1,193 +1,308 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <style>
-    * { box-sizing: border-box; }
-    body { 
-      background-color: #0f1117; 
-      width: 350px; 
-      padding: 14px; 
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; 
-      color: #f1f5f9; 
+    * { 
+      box-sizing: border-box; 
       margin: 0; 
-      user-select: none;
-      position: relative;
+      padding: 0; 
     }
     
-    .header-box {
+    body { 
+      background-color: #0b0f19; 
+      width: 400px; 
+      padding: 16px; 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+      color: #f1f5f9; 
+      user-select: none;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Top Navigation / Brand Header */
+    .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
-      padding-bottom: 8px;
-      border-bottom: 1px solid #1e293b;
+      margin-bottom: 14px;
     }
-    .header-title {
+    .brand {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
     }
-    .header-title img {
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      border: 1px solid #3b82f6;
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      object-fit: cover;
     }
-    .header-title h2 {
-      margin: 0;
+    .brand-title {
       font-size: 16px;
-      font-weight: 700;
-      background: linear-gradient(135deg, #60a5fa, #3b82f6);
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      background: linear-gradient(135deg, #60a5fa, #38bdf8);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
-
-    .btn-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      margin-bottom: 8px;
+    .brand-tag {
+      font-size: 10px;
+      font-weight: 600;
+      color: #64748b;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 2px 7px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: #22c55e;
+      box-shadow: 0 0 6px #22c55e;
+    }
+    .status-dot.busy {
+      background-color: #38bdf8;
+      box-shadow: 0 0 6px #38bdf8;
+      animation: pulse 1.5s infinite;
     }
 
-    button { 
-      width: 100%; 
-      padding: 9px; 
-      color: white; 
-      border: none; 
-      cursor: pointer; 
-      font-weight: 600; 
-      border-radius: 6px; 
-      font-size: 11px; 
+    @keyframes pulse {
+      0% { opacity: 0.6; }
+      50% { opacity: 1; }
+      100% { opacity: 0.6; }
+    }
+
+    /* Actions Section */
+    .action-hero {
+      margin-bottom: 8px;
+    }
+    .btn-hero {
+      width: 100%;
+      padding: 11px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      color: white;
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 50%, #1e40af 100%);
+      border: 1px solid rgba(96, 165, 250, 0.3);
+      border-radius: 8px;
+      cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 5px;
+      gap: 7px;
+      transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
+    }
+    .btn-hero:hover {
+      filter: brightness(1.1);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(37, 99, 235, 0.35);
+    }
+    .btn-hero:active {
+      transform: translateY(0);
+    }
+
+    .action-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .btn-action {
+      padding: 8px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #e2e8f0;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 7px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
       transition: all 0.15s ease;
     }
-    button:hover { filter: brightness(1.1); transform: translateY(-1px); }
-    button:active { transform: translateY(0); filter: brightness(0.95); }
-    
-    .btn-blue { background: linear-gradient(135deg, #2563eb, #1d4ed8); }
-    .btn-green { background: linear-gradient(135deg, #16a34a, #15803d); }
-    .btn-purple { background: linear-gradient(135deg, #7c3aed, #6d28d9); }
-    .btn-pink { background: linear-gradient(135deg, #db2777, #be185d); }
-    .btn-red { background: linear-gradient(135deg, #dc2626, #b91c1c); }
-
-    button:disabled { 
-      background: #1e293b !important; 
-      cursor: not-allowed; 
-      color: #64748b; 
-      opacity: 0.6;
-      transform: none !important;
-      filter: none !important;
+    .btn-action:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.16);
+      color: #fff;
     }
-    
-    .settings-panel {
-      background: #141824;
-      border: 1px solid #1e293b;
-      border-radius: 7px;
-      padding: 9px;
-      margin-top: 8px;
+    .btn-action:active {
+      transform: scale(0.98);
     }
 
-    .input-group { margin-bottom: 6px; }
-    .input-group:last-child { margin-bottom: 0; }
-    .input-label { font-size: 10px; color: #94a3b8; margin-bottom: 2px; display: block; font-weight: 500; }
-    
-    input, select { 
-      width: 100%; 
-      padding: 6px 8px; 
-      background: #090d16; 
-      color: #f1f5f9; 
-      border: 1px solid #273549; 
-      border-radius: 5px; 
-      font-size: 11px; 
-      outline: none; 
-      transition: border-color 0.2s;
-    }
-    input:focus, select:focus { border-color: #3b82f6; }
-    
-    .progress-box {
-      margin-top: 8px;
+    .btn-stop {
       display: none;
+      width: 100%;
+      padding: 9px;
+      margin-bottom: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #fecaca;
+      background: rgba(220, 38, 38, 0.2);
+      border: 1px solid #ef4444;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: all 0.15s ease;
     }
-    .progress-bar-bg {
-      background-color: #1e293b;
+    .btn-stop:hover {
+      background: rgba(220, 38, 38, 0.3);
+    }
+
+    button:disabled {
+      opacity: 0.45 !important;
+      cursor: not-allowed !important;
+      transform: none !important;
+      box-shadow: none !important;
+    }
+
+    /* Settings Section */
+    .settings-section {
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .settings-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .settings-title {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #94a3b8;
+    }
+    
+    .form-group {
+      margin-bottom: 8px;
+    }
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+    .form-label {
+      display: block;
+      font-size: 10px;
+      color: #64748b;
+      font-weight: 600;
+      margin-bottom: 3px;
+    }
+    .form-control {
+      width: 100%;
+      padding: 7px 9px;
+      font-size: 11px;
+      color: #f1f5f9;
+      background: #060911;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      outline: none;
+      transition: all 0.15s ease;
+    }
+    .form-control:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+    }
+    select.form-control {
+      cursor: pointer;
+    }
+
+    /* Progress & Status */
+    .progress-wrapper {
+      display: none;
+      margin-bottom: 10px;
+    }
+    .progress-track {
+      background: rgba(255, 255, 255, 0.06);
       border-radius: 4px;
-      height: 6px;
+      height: 5px;
       overflow: hidden;
     }
-    .progress-bar-fill {
-      background: linear-gradient(90deg, #3b82f6, #10b981);
+    .progress-bar {
       height: 100%;
       width: 0%;
-      transition: width 0.3s ease;
+      background: linear-gradient(90deg, #3b82f6, #10b981);
+      border-radius: 4px;
+      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
-    .progress-label {
-      color: #94a3b8;
-      text-align: center;
+    .progress-info {
+      display: flex;
+      justify-content: space-between;
       font-size: 10px;
-      margin-top: 3px;
+      color: #94a3b8;
+      margin-top: 4px;
       font-weight: 500;
     }
 
-    #status { 
-      margin-top: 8px; 
-      font-size: 11px; 
-      color: #38bdf8; 
-      font-weight: 600; 
+    .status-text {
       text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #38bdf8;
+      margin-bottom: 10px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
 
-    /* Log Container & Toolbar */
-    .log-section {
-      margin-top: 8px;
-      background: #090d16;
-      border: 1px solid #1e293b;
-      border-radius: 7px;
+    /* Console Logs */
+    .console-box {
+      background: #060911;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
       overflow: hidden;
     }
-    .log-header {
+    .console-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 5px 8px;
-      background: #141824;
-      border-bottom: 1px solid #1e293b;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .console-title {
       font-size: 10px;
-      font-weight: 600;
-      color: #94a3b8;
+      font-weight: 700;
+      color: #64748b;
+      letter-spacing: 0.3px;
     }
-    .log-actions {
+    .console-actions {
       display: flex;
-      gap: 4px;
+      gap: 5px;
     }
-    .log-btn {
+    .btn-tool {
       background: transparent;
-      border: 1px solid #273549;
+      border: 1px solid rgba(255, 255, 255, 0.1);
       color: #94a3b8;
-      padding: 2px 6px;
       font-size: 9px;
-      border-radius: 3px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
       cursor: pointer;
-      width: auto;
-      font-weight: 500;
+      transition: all 0.15s ease;
     }
-    .log-btn:hover {
-      background: #1e293b;
-      color: #f1f5f9;
-      transform: none;
+    .btn-tool:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
     }
-    
-    .log { 
-      height: 130px; 
-      overflow-y: auto; 
-      padding: 6px; 
-      font-family: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace; 
-      font-size: 10px; 
+
+    .log-stream {
+      height: 150px;
+      overflow-y: auto;
+      padding: 8px;
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+      font-size: 10px;
       line-height: 1.45;
       user-select: text;
     }
@@ -200,7 +315,7 @@
       word-break: break-word;
       display: flex;
       align-items: flex-start;
-      gap: 5px;
+      gap: 6px;
     }
     .log-time {
       color: #475569;
@@ -212,7 +327,6 @@
       flex-grow: 1;
     }
 
-    /* Log Type Highlights */
     .log-error {
       background: rgba(239, 68, 68, 0.12);
       border-left-color: #ef4444;
@@ -234,12 +348,12 @@
       color: #7dd3fc;
     }
     .log-info {
-      background: rgba(148, 163, 184, 0.05);
+      background: rgba(148, 163, 184, 0.04);
       border-left-color: #475569;
       color: #cbd5e1;
     }
 
-    /* Summary Report Modal */
+    /* Full-Screen Report Overlay */
     #reportModal {
       display: none;
       position: absolute;
@@ -247,119 +361,151 @@
       left: 0;
       width: 100%;
       height: 100%;
-      background: #0b0d14;
+      background: #0b0f19;
       z-index: 100;
-      padding: 12px;
-      box-sizing: border-box;
+      padding: 14px;
       overflow-y: auto;
     }
+    .report-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
     .report-card {
-      background: #141824;
-      border: 1px solid #1e293b;
-      border-radius: 7px;
-      padding: 10px;
-      margin-bottom: 8px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
     }
     .report-badge {
       display: inline-block;
-      padding: 2px 6px;
+      padding: 2px 7px;
       font-size: 9px;
       font-weight: 700;
       border-radius: 4px;
     }
-    .badge-done { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.4); }
-    .badge-progress { background: rgba(245, 158, 11, 0.2); color: #facc15; border: 1px solid rgba(245, 158, 11, 0.4); }
-    .module-item {
+    .badge-done { 
+      background: rgba(34, 197, 94, 0.2); 
+      color: #4ade80; 
+      border: 1px solid rgba(34, 197, 94, 0.4); 
+    }
+    .badge-progress { 
+      background: rgba(245, 158, 11, 0.2); 
+      color: #facc15; 
+      border: 1px solid rgba(245, 158, 11, 0.4); 
+    }
+    .module-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 5px 0;
-      border-bottom: 1px solid #1e293b;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
       font-size: 10px;
     }
-    .module-item:last-child { border-bottom: none; }
+    .module-row:last-child {
+      border-bottom: none;
+    }
   </style>
 </head>
 <body>
-  <div class="header-box">
-    <div class="header-title">
-      <img src="icon.jpg" alt="Logo">
-      <h2>FcukCoursera</h2>
+
+  <!-- Brand Header -->
+  <div class="header">
+    <div class="brand">
+      <img src="icon.jpg" alt="Logo" class="brand-logo">
+      <div class="brand-title">FcukCoursera</div>
     </div>
-    <span style="font-size: 10px; color: #64748b; font-weight: 500;">v2.0 Pro</span>
-  </div>
-  
-  <div class="btn-grid">
-    <button id="startBtn" class="btn-blue">▶ Skip Videos</button>
-    <button id="readBtn" class="btn-green">✓ Skip Readings</button>
+    <div class="brand-tag">
+      <div id="statusDot" class="status-dot"></div>
+      <span>v2.2 Pro</span>
+    </div>
   </div>
 
-  <div class="settings-panel">
-    <div class="input-group">
-      <label class="input-label" for="providerSelect">AI Provider</label>
-      <select id="providerSelect">
-        <option value="gemini">Google Gemini (Free Tier)</option>
+  <!-- Primary Hero Action -->
+  <div class="action-hero">
+    <button id="completeBtn" class="btn-hero">🚀 Complete Course (All-in-One)</button>
+  </div>
+
+  <!-- Action Grid -->
+  <div class="action-grid">
+    <button id="quizBtn" class="btn-action">⚡ Quizzes</button>
+    <button id="startBtn" class="btn-action">▶ Videos</button>
+    <button id="readBtn" class="btn-action">✓ Readings</button>
+  </div>
+
+  <button id="stopBtn" class="btn-stop">🛑 Stop Active Process</button>
+
+  <!-- AI Settings -->
+  <div class="settings-section">
+    <div class="settings-header">
+      <span class="settings-title">AI Engine Settings</span>
+    </div>
+
+    <div class="form-group">
+      <select id="providerSelect" class="form-control">
+        <option value="gemini">Google Gemini (Default)</option>
         <option value="openrouter">OpenRouter (Free & Paid)</option>
-        <option value="groq">Groq (Ultra-Fast)</option>
+        <option value="groq">Groq (Ultra-Fast ~100ms)</option>
         <option value="custom">Custom OpenAI / Local Ollama</option>
       </select>
     </div>
 
-    <div class="input-group">
-      <label class="input-label" for="apiKey" id="apiKeyLabel">Gemini API Key</label>
-      <input type="password" id="apiKey" placeholder="Paste API Key here...">
+    <div class="form-group">
+      <input type="password" id="apiKey" class="form-control" placeholder="Paste API Key here...">
     </div>
 
-    <div class="input-group" id="modelGroup" style="display: none;">
-      <label class="input-label" for="modelInput">Model Name</label>
-      <input type="text" id="modelInput" placeholder="meta-llama/llama-3.3-70b-instruct:free">
+    <div class="form-group" id="modelGroup" style="display: none;">
+      <label class="form-label" for="modelInput">Model Name</label>
+      <input type="text" id="modelInput" class="form-control" placeholder="meta-llama/llama-3.3-70b-instruct:free">
     </div>
 
-    <div class="input-group" id="endpointGroup" style="display: none;">
-      <label class="input-label" for="endpointInput">Custom API Endpoint URL</label>
-      <input type="text" id="endpointInput" placeholder="https://api.openai.com/v1/chat/completions">
-    </div>
-
-    <div style="margin-top: 8px;">
-      <button id="quizBtn" class="btn-purple" style="margin-bottom: 5px;">⚡ Solve Quizzes & Practice</button>
-      <button id="completeBtn" class="btn-pink">🚀 Complete Course (All-in-One)</button>
-      <button id="stopBtn" class="btn-red" style="display: none; margin-top: 5px;">🛑 Stop Process</button>
+    <div class="form-group" id="endpointGroup" style="display: none;">
+      <label class="form-label" for="endpointInput">Custom API Endpoint URL</label>
+      <input type="text" id="endpointInput" class="form-control" placeholder="http://localhost:11434/v1/chat/completions">
     </div>
   </div>
-  
-  <div id="progressContainer" class="progress-box">
-    <div class="progress-bar-bg">
-      <div id="progressBar" class="progress-bar-fill"></div>
+
+  <!-- Progress Tracking -->
+  <div id="progressContainer" class="progress-wrapper">
+    <div class="progress-track">
+      <div id="progressBar" class="progress-bar"></div>
     </div>
-    <div id="progressText" class="progress-label">0%</div>
+    <div class="progress-info">
+      <span id="progressText">0%</span>
+      <span id="progressStep">Starting...</span>
+    </div>
   </div>
 
-  <div id="status">Ready</div>
+  <!-- Status Bar -->
+  <div id="status" class="status-text">Ready</div>
 
-  <div class="log-section">
-    <div class="log-header">
-      <span>Console Activity</span>
-      <div class="log-actions">
-        <button id="openReportBtn" class="log-btn">📊 Report</button>
-        <button id="copyLogBtn" class="log-btn">Copy</button>
-        <button id="clearLogBtn" class="log-btn">Clear</button>
+  <!-- Console Log Terminal -->
+  <div class="console-box">
+    <div class="console-header">
+      <span class="console-title">Live Activity</span>
+      <div class="console-actions">
+        <button id="openReportBtn" class="btn-tool">📊 Report</button>
+        <button id="copyLogBtn" class="btn-tool">📋 Copy</button>
+        <button id="clearLogBtn" class="btn-tool">🧹 Clear</button>
       </div>
     </div>
-    <div id="log" class="log"></div>
+    <div id="log" class="log-stream"></div>
   </div>
 
-  <!-- Interactive Summary Report Modal -->
+  <!-- Modal Summary Report Overlay -->
   <div id="reportModal">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-      <h3 style="margin: 0; font-size: 13px; color: #38bdf8;">📊 Course Completion Report</h3>
-      <button id="closeReportBtn" class="log-btn" style="padding: 3px 8px;">✕ Close</button>
+    <div class="report-header">
+      <h3 style="font-size: 13px; color: #38bdf8; font-weight: 700;">📊 Course Completion Report</h3>
+      <button id="closeReportBtn" class="btn-tool" style="padding: 3px 9px;">✕ Close</button>
     </div>
     <div id="reportBody">
-      <div style="text-align: center; color: #64748b; font-size: 11px; padding: 20px 0;">
+      <div style="text-align: center; color: #64748b; font-size: 11px; padding: 25px 0;">
         Run "Complete Course" to generate the full completion report.
       </div>
     </div>
-    <button id="copyReportBtn" class="btn-blue" style="margin-top: 10px; display: none;">📋 Copy Full Report</button>
+    <button id="copyReportBtn" class="btn-hero" style="margin-top: 10px; display: none;">📋 Copy Full Report</button>
   </div>
 
   <script src="popup.js"></script>

@@ -9,13 +9,18 @@ function setRunningUIState(isRunning) {
         stopBtn.style.display = isRunning ? 'block' : 'none';
     }
 
+    const statusDot = document.getElementById('statusDot');
+    if (statusDot) {
+        if (isRunning) statusDot.classList.add('busy');
+        else statusDot.classList.remove('busy');
+    }
+
     if (isRunning) {
         document.getElementById('progressContainer').style.display = 'block';
     }
 }
 
 const providerSelect = document.getElementById('providerSelect');
-const apiKeyLabel = document.getElementById('apiKeyLabel');
 const apiKeyInput = document.getElementById('apiKey');
 const modelGroup = document.getElementById('modelGroup');
 const modelInput = document.getElementById('modelInput');
@@ -25,31 +30,27 @@ const logContainer = document.getElementById('log');
 
 function updateProviderUI(provider) {
     if (provider === 'openrouter') {
-        apiKeyLabel.innerText = "OpenRouter API Key";
-        apiKeyInput.placeholder = "sk-or-v1-...";
+        apiKeyInput.placeholder = "OpenRouter API Key (sk-or-v1-...)";
         modelGroup.style.display = 'block';
         if (!modelInput.value) modelInput.value = "meta-llama/llama-3.3-70b-instruct:free";
         modelInput.placeholder = "meta-llama/llama-3.3-70b-instruct:free";
         endpointGroup.style.display = 'none';
     } else if (provider === 'groq') {
-        apiKeyLabel.innerText = "Groq API Key";
-        apiKeyInput.placeholder = "gsk_...";
+        apiKeyInput.placeholder = "Groq API Key (gsk_...)";
         modelGroup.style.display = 'block';
         if (!modelInput.value) modelInput.value = "llama-3.3-70b-versatile";
         modelInput.placeholder = "llama-3.3-70b-versatile";
         endpointGroup.style.display = 'none';
     } else if (provider === 'custom') {
-        apiKeyLabel.innerText = "Custom API Key / Bearer Token";
-        apiKeyInput.placeholder = "API Key (leave blank if local/none)";
+        apiKeyInput.placeholder = "Custom API Key / Bearer (optional)";
         modelGroup.style.display = 'block';
         modelInput.placeholder = "e.g. gpt-4o-mini, llama3, deepseek-chat";
         endpointGroup.style.display = 'block';
         if (!endpointInput.value) endpointInput.value = "http://localhost:11434/v1/chat/completions";
-        endpointInput.placeholder = "https://api.openai.com/v1/chat/completions";
+        endpointInput.placeholder = "http://localhost:11434/v1/chat/completions";
     } else {
         // Gemini
-        apiKeyLabel.innerText = "Gemini API Key";
-        apiKeyInput.placeholder = "AIzaSy...";
+        apiKeyInput.placeholder = "Gemini API Key (AIzaSy...)";
         modelGroup.style.display = 'none';
         endpointGroup.style.display = 'none';
     }
@@ -177,7 +178,7 @@ document.getElementById('copyLogBtn').addEventListener('click', () => {
     navigator.clipboard.writeText(rawLines).then(() => {
         const btn = document.getElementById('copyLogBtn');
         const oldText = btn.innerText;
-        btn.innerText = "Copied!";
+        btn.innerText = "✓ Copied";
         setTimeout(() => { btn.innerText = oldText; }, 1500);
     });
 });
@@ -208,18 +209,18 @@ function renderSummaryReport(data) {
     
     let html = `
         <div class="report-card">
-            <div style="font-size: 11px; font-weight: 700; color: #f1f5f9; margin-bottom: 4px;">${courseTitle || 'Course Summary'}</div>
-            <div style="display: flex; justify-content: space-between; font-size: 10px; color: #94a3b8; margin-bottom: 5px;">
+            <div style="font-size: 12px; font-weight: 800; color: #f1f5f9; margin-bottom: 4px;">${courseTitle || 'Course Summary'}</div>
+            <div style="display: flex; justify-content: space-between; font-size: 10px; color: #94a3b8; margin-bottom: 6px;">
                 <span>Overall Completion</span>
-                <span style="font-weight: bold; color: ${percent >= 100 ? '#4ade80' : '#38bdf8'};">${percent}% (${completedItems}/${totalItems})</span>
+                <span style="font-weight: 700; color: ${percent >= 100 ? '#4ade80' : '#38bdf8'};">${percent}% (${completedItems}/${totalItems})</span>
             </div>
-            <div style="background: #1e293b; height: 6px; border-radius: 3px; overflow: hidden;">
+            <div style="background: rgba(255, 255, 255, 0.08); height: 6px; border-radius: 3px; overflow: hidden;">
                 <div style="background: linear-gradient(90deg, #3b82f6, #10b981); height: 100%; width: ${percent}%;"></div>
             </div>
         </div>
 
         <div class="report-card">
-            <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px;">📁 Modules Coverage</div>
+            <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">📁 Modules Coverage</div>
     `;
 
     (modules || []).forEach((m, idx) => {
@@ -228,8 +229,8 @@ function renderSummaryReport(data) {
         const badgeText = isDone ? '100% DONE' : `${m.percent}% (${m.completedCount}/${m.totalCount})`;
 
         html += `
-            <div class="module-item">
-                <span style="color: #cbd5e1; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            <div class="module-row">
+                <span style="color: #cbd5e1; max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;">
                     ${idx + 1}. ${m.moduleName}
                 </span>
                 <span class="report-badge ${badgeClass}">${badgeText}</span>
@@ -242,8 +243,8 @@ function renderSummaryReport(data) {
     if (categories) {
         html += `
             <div class="report-card">
-                <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px;">📋 Category Summary</div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 9px; color: #cbd5e1;">
+                <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">📋 Category Summary</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 10px; color: #cbd5e1;">
                     <div>🎬 Videos: <b>${categories.videos || 0}</b></div>
                     <div>📖 Readings: <b>${categories.readings || 0}</b></div>
                     <div>💬 Discussions: <b>${categories.discussions || 0}</b></div>
@@ -259,19 +260,19 @@ function renderSummaryReport(data) {
     if (remainingItems && remainingItems.length > 0) {
         html += `
             <div class="report-card" style="border-left: 3px solid #f59e0b;">
-                <div style="font-size: 10px; font-weight: 700; color: #fde047; margin-bottom: 4px;">⏳ Remaining Items (${remainingItems.length})</div>
-                <div style="font-size: 9px; color: #94a3b8; line-height: 1.4;">
+                <div style="font-size: 10px; font-weight: 700; color: #fde047; margin-bottom: 6px;">⏳ Remaining Items (${remainingItems.length})</div>
+                <div style="font-size: 9px; color: #94a3b8; line-height: 1.5;">
         `;
         remainingItems.slice(0, 8).forEach(item => {
             html += `<div>• [${item.moduleName || 'Module'}] <b>${item.name}</b> (${item.typeName || 'item'})</div>`;
         });
         if (remainingItems.length > 8) {
-            html += `<div style="font-style: italic; margin-top: 3px;">+ ${remainingItems.length - 8} more items</div>`;
+            html += `<div style="font-style: italic; margin-top: 4px; color: #64748b;">+ ${remainingItems.length - 8} more items</div>`;
         }
         html += `</div></div>`;
     } else {
         html += `
-            <div class="report-card" style="border-left: 3px solid #22c55e; text-align: center; color: #86efac; font-size: 10px; font-weight: bold;">
+            <div class="report-card" style="border-left: 3px solid #22c55e; text-align: center; color: #86efac; font-size: 11px; font-weight: 700;">
                 🎉 All modules and items are fully completed!
             </div>
         `;
@@ -280,7 +281,6 @@ function renderSummaryReport(data) {
     reportBody.innerHTML = html;
     copyReportBtn.style.display = 'block';
 
-    // Store raw text for copying
     currentRawReportText = `=== COURSE COMPLETION REPORT ===\nCourse: ${courseTitle}\nProgress: ${percent}% (${completedItems}/${totalItems})\n\nMODULES:\n` +
         (modules || []).map(m => `- ${m.moduleName}: ${m.percent}% (${m.completedCount}/${m.totalCount})`).join('\n') +
         `\n\nREMAINING (${(remainingItems || []).length}):\n` +
@@ -317,7 +317,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Starting Video Skip...";
+    document.getElementById('status').innerText = "Skipping Videos...";
 
     chrome.tabs.sendMessage(tab.id, { action: "start_skipping" }, (response) => {
         if (chrome.runtime.lastError) {
@@ -336,7 +336,7 @@ document.getElementById('readBtn').addEventListener('click', async () => {
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Starting Reading Completion...";
+    document.getElementById('status').innerText = "Completing Readings...";
 
     chrome.tabs.sendMessage(tab.id, { action: "start_reading_completion" }, (response) => {
         if (chrome.runtime.lastError) {
@@ -369,7 +369,8 @@ document.getElementById('readBtn').addEventListener('click', async () => {
                     const percentage = Math.round((current / total) * 100);
                     document.getElementById('progressContainer').style.display = 'block';
                     document.getElementById('progressBar').style.width = percentage + '%';
-                    document.getElementById('progressText').innerText = `${percentage}% - ${message}`;
+                    document.getElementById('progressText').innerText = `${percentage}%`;
+                    document.getElementById('progressStep').innerText = message;
                 }
             }
         });
@@ -392,7 +393,7 @@ document.getElementById('quizBtn').addEventListener('click', async () => {
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Starting Quiz & Practice Solver...";
+    document.getElementById('status').innerText = "Solving Quizzes & Practice...";
 
     chrome.tabs.sendMessage(tab.id, { 
         action: "start_quiz_solver", 
@@ -423,7 +424,7 @@ document.getElementById('completeBtn').addEventListener('click', async () => {
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Starting Full Course Completion...";
+    document.getElementById('status').innerText = "Running Complete Course...";
 
     chrome.tabs.sendMessage(tab.id, { 
         action: "start_complete_course", 
@@ -455,7 +456,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         
         document.getElementById('progressBar').style.width = percentage + '%';
-        document.getElementById('progressText').innerText = `${percentage}% - ${message}`;
+        document.getElementById('progressText').innerText = `${percentage}%`;
+        document.getElementById('progressStep').innerText = message;
     }
     if (request.action === "summary_report") {
         renderSummaryReport(request.data);

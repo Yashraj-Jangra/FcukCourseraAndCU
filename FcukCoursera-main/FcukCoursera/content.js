@@ -923,7 +923,7 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig) {
         // Check if it was a success or failure type
         if (result?.submissionState) {
             log("GraphQL Session Started Successfully!");
-            await processGraphQLSession(courseId, item.id, headers, apiKey);
+            await processGraphQLSession(courseId, item.id, headers, aiConfig);
         } else if (result?.errors) {
             log(`Start Attempt Failed: ${JSON.stringify(result.errors)}`);
         } else {
@@ -935,7 +935,7 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig) {
     }
 }
 
-async function processGraphQLSession(courseId, itemId, headers, apiKey) {
+async function processGraphQLSession(courseId, itemId, headers, aiConfig) {
     log("Attempting to fetch questions via GraphQL...");
     
     const graphqlUrl = 'https://www.coursera.org/graphql-gateway?opname=QueryState';

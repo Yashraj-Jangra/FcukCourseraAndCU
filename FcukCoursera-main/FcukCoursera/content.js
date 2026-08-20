@@ -149,9 +149,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 async function startCompleteCourseProcess(aiConfig) {
     try {
-        const { userId, courseId, courseSlug, courseTitle, allItems } = await getCourseData();
+        const { userId, courseId, courseSlug, courseTitle, allItems, modules } = await getCourseData();
         
-        log(`Starting Course Completion for "${courseTitle}". Found ${allItems.length} items.`);
+        log(`Starting Course Completion for "${courseTitle}". Found ${allItems.length} items across ${modules.length} modules.`);
         updateProgress(0, allItems.length, "Starting...");
 
         let completedCount = 0;
@@ -227,6 +227,8 @@ async function startCompleteCourseProcess(aiConfig) {
         } else {
             updateProgress(allItems.length, allItems.length, "Done!");
             updateStatus(`Done! Processed ${allItems.length} items.`);
+            // Generate and output comprehensive course summary report
+            await generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules);
         }
         chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
 
@@ -436,7 +438,7 @@ async function getCourseData() {
         const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
         const courseTitle = cleanTitle || courseSlug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 
-        return { userId, courseId, courseSlug, courseTitle, allItems };
+        return { userId, courseId, courseSlug, courseTitle, allItems, modules };
     } catch (e) {
         throw new Error("Error fetching syllabus: " + e.message);
     }
@@ -896,7 +898,7 @@ async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig
 
 async function startQuizSolverProcess(aiConfig) {
     try {
-        const { userId, courseId, courseSlug, courseTitle, allItems } = await getCourseData();
+        const { userId, courseId, courseSlug, courseTitle, allItems, modules } = await getCourseData();
         
         const uniqueTypes = [...new Set(allItems.map(item => item.typeName))];
         log(`Found item types: ${uniqueTypes.map(t => t || 'undefined').join(', ')}`);
@@ -941,6 +943,8 @@ async function startQuizSolverProcess(aiConfig) {
             updateStatus("Process aborted.");
         } else {
             updateStatus(`Done! Processed quizzes, practice assignments & dialogues.`);
+            // Generate summary report
+            await generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules);
         }
         chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
 
@@ -990,10 +994,12 @@ async function processExamItem(userId, courseId, item, aiConfig, courseContext =
 }
 
 async function processUngradedAssignment(userId, courseId, item, aiConfig, courseContext = null) {
-    log(`Attempting to process Ungraded Assignment: ${item.name}`);
+    const isGraded = ['exam', 'gradedQuiz', 'gradedAssignment', 'diagnosticExam'].includes(item.typeName) || 
+                     (item.contentSummary && JSON.stringify(item.contentSummary).includes('LIMITED_SUBMISSIONS'));
+
+    log(`Processing ${isGraded ? 'Graded Assignment' : 'Quiz'}: ${item.name}`);
 
     // Strategy: Use GraphQL Submission_StartAttempt
-    // Based on user logs, this is the correct way to start these assignments
     const graphqlUrl = 'https://www.coursera.org/graphql-gateway?opname=Submission_StartAttempt';
     
     const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
@@ -1012,6 +1018,24 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
           submissionState {
             assignment {
               id
+              assignmentFeatures
+            }
+            allowedAction
+            warnings
+            attempts {
+              attemptCount
+              allowedAttempts
+              attemptsRemaining
+              inProgressAttempt {
+                id
+                draft {
+                  id
+                }
+              }
+              completedAttempts {
+                grade
+                isPassed
+              }
             }
           }
         }
@@ -1059,7 +1083,35 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
         
         // Check if it was a success or failure type
         if (result?.submissionState) {
-            log("GraphQL Session Started Successfully!");
+            const subState = result.submissionState;
+            const attemptsInfo = subState.attempts;
+            
+            // Check if already passed (to save limited attempts)
+            const completedAttempts = attemptsInfo?.completedAttempts || [];
+            const isAlreadyPassed = completedAttempts.some(a => a.isPassed === true);
+            
+            if (isAlreadyPassed && isGraded) {
+                log(`[Graded Assignment] Already passed! Highest grade recorded. Skipping to save attempts.`);
+                await completeSingleReading(userId, courseId, '', item.id);
+                return;
+            }
+
+            // Check remaining attempts
+            const allowed = attemptsInfo?.allowedAttempts;
+            const used = attemptsInfo?.attemptCount || 0;
+            const remaining = attemptsInfo?.attemptsRemaining;
+
+            if (allowed && remaining !== undefined && remaining <= 0) {
+                log(`[Graded Assignment] Out of attempts (${used}/${allowed} used). Skipping to prevent penalty.`);
+                return;
+            }
+
+            if (isGraded && allowed) {
+                log(`[Graded Assignment] Attempt ${used + 1}/${allowed} in progress... (Highest score will be kept)`);
+            } else {
+                log("GraphQL Session Started Successfully!");
+            }
+
             await processGraphQLSession(courseId, item.id, headers, aiConfig, courseContext);
         } else if (result?.errors) {
             log(`Start Attempt Failed: ${JSON.stringify(result.errors)}`);
@@ -2410,6 +2462,17 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
       submissionState {
         allowedAction
         warnings
+        attempts {
+          attemptCount
+          allowedAttempts
+          attemptsRemaining
+          completedAttempts {
+            grade
+            isPassed
+            __typename
+          }
+          __typename
+        }
         __typename
       }
     }
@@ -2417,6 +2480,7 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
       __typename
       errors {
         errorCode
+        message
         __typename
       }
     }
@@ -2445,7 +2509,20 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
         });
 
         if (resp.ok) {
-            log("Quiz Submitted Successfully!");
+            const data = await resp.json();
+            const result = data.data?.Submission_SubmitLatestDraft;
+            if (result?.submissionState) {
+                log(`[Quiz / Graded Assignment Submitted Successfully!]`);
+                const completedAttempts = result.submissionState?.attempts?.completedAttempts;
+                if (completedAttempts && completedAttempts.length > 0) {
+                    const latest = completedAttempts[completedAttempts.length - 1];
+                    const scoreText = (latest.grade !== undefined && latest.grade !== null) ? `${Math.round(latest.grade * 100)}%` : 'Recorded';
+                    const statusText = latest.isPassed ? 'PASSED (✓)' : 'Pending Grade';
+                    log(`[Grade Result] Score: ${scoreText} - ${statusText}`);
+                }
+            } else if (result?.errors) {
+                log(`Submission Notice: ${JSON.stringify(result.errors)}`);
+            }
         } else {
             const errorText = await resp.text();
             log(`Failed to submit quiz: ${resp.status} - ${errorText.substring(0, 200)}`);
@@ -2455,14 +2532,29 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
     }
 }
 
-async function processExamItem(userId, courseId, item, aiConfig) {
+async function processExamItem(userId, courseId, item, aiConfig, courseContext = null) {
     try {
-        log(`Attempting to start exam session for ${item.name}...`);
+        log(`Processing Graded Exam / Assessment: ${item.name}...`);
         
-        const sessionUrl = `https://www.coursera.org/api/onDemandExamSessions.v1`;
+        // Attempt GraphQL assignment first (modern Coursera exams use GraphQL gateway)
+        await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
+
+    } catch (e) {
+        log(`Error processing exam: ${e.message}`);
+    }
+}
+
+/**
+ * Queries real-time completion state from Coursera's progress APIs,
+ * builds a module-by-module and category breakdown, logs the formatted report,
+ * and sends it to the popup UI.
+ */
+async function generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules = []) {
+    try {
+        log(`Generating Course Completion & Module Summary Report...`);
+
         const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
         const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
-        
         const headers = {
             'Content-Type': 'application/json',
             'x-csrf3-token': csrfToken,
@@ -2470,42 +2562,153 @@ async function processExamItem(userId, courseId, item, aiConfig) {
             'x-requested-with': 'XMLHttpRequest',
         };
 
-        const startBody = JSON.stringify({
-            courseId: courseId,
-            itemId: item.id
+        // 1. Fetch completed item IDs from Coursera Progress API
+        const completedIds = new Set();
+        try {
+            const progressUrl = `https://www.coursera.org/api/onDemandCourseProgresses.v1/${userId}~${courseId}?includes=completedItemIds,itemProgresses`;
+            const resp = await fetch(progressUrl, { headers, credentials: 'include' });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.elements && data.elements[0]) {
+                    const el = data.elements[0];
+                    if (Array.isArray(el.completedItemIds)) {
+                        el.completedItemIds.forEach(id => completedIds.add(id));
+                    }
+                    if (Array.isArray(el.itemProgresses)) {
+                        el.itemProgresses.forEach(ip => {
+                            if (ip.isCompleted || ip.progressState === 'COMPLETED') {
+                                completedIds.add(ip.itemId);
+                            }
+                        });
+                    }
+                }
+            }
+        } catch(e) {}
+
+        // Fallback: check onDemandItemViews if progress API missed some
+        try {
+            const viewsUrl = `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}&userId=${userId}`;
+            const vResp = await fetch(viewsUrl, { headers, credentials: 'include' });
+            if (vResp.ok) {
+                const vData = await vResp.json();
+                (vData.elements || []).forEach(v => {
+                    if (v.completed || v.isCompleted) completedIds.add(v.itemId);
+                });
+            }
+        } catch(e) {}
+
+        // 2. Compute Module Coverage
+        const moduleMap = {};
+        (modules || []).forEach(m => {
+            moduleMap[m.id] = {
+                id: m.id,
+                moduleName: m.name,
+                items: [],
+                completedCount: 0,
+                totalCount: 0
+            };
         });
 
-        const startResp = await fetch(sessionUrl, {
-            method: 'POST',
-            headers: headers,
-            body: startBody,
-            credentials: 'include'
+        // Populate items in moduleMap
+        allItems.forEach(item => {
+            const modId = item.moduleId || 'unknown';
+            if (!moduleMap[modId]) {
+                moduleMap[modId] = {
+                    id: modId,
+                    moduleName: item.moduleName || 'General',
+                    items: [],
+                    completedCount: 0,
+                    totalCount: 0
+                };
+            }
+            const isDone = completedIds.has(item.id);
+            moduleMap[modId].items.push({ ...item, isDone });
+            moduleMap[modId].totalCount++;
+            if (isDone) moduleMap[modId].completedCount++;
         });
 
-        if (!startResp.ok) {
-            const text = await startResp.text();
-            log(`Failed to start session: ${startResp.status} - ${text.substring(0, 100)}`);
-            return;
-        }
+        const moduleReports = Object.values(moduleMap).map(m => {
+            const percent = m.totalCount > 0 ? Math.round((m.completedCount / m.totalCount) * 100) : 0;
+            return {
+                id: m.id,
+                moduleName: m.moduleName,
+                totalCount: m.totalCount,
+                completedCount: m.completedCount,
+                percent: percent,
+                isComplete: m.completedCount >= m.totalCount
+            };
+        });
 
-        let sessionId = startResp.headers.get('x-coursera-id') || startResp.headers.get('X-Coursera-Id');
-        if (!sessionId) {
-            try {
-                const data = await startResp.json();
-                if (data && data.id) sessionId = data.id;
-            } catch(e) {}
-        }
+        // 3. Compute Category Stats
+        const categories = {
+            videos: 0,
+            readings: 0,
+            discussions: 0,
+            dialogues: 0,
+            labs: 0,
+            quizzes: 0,
+            graded: 0
+        };
 
-        if (!sessionId) {
-            log("Error: No Session ID returned in headers or body.");
-            return;
-        }
-        
-        log(`Session Started! Session ID: ${sessionId}`);
-        await processSession('onDemandExamSessions.v1', sessionId, headers, aiConfig);
+        const remainingItems = [];
+        let totalCompleted = 0;
 
-    } catch (e) {
-        log(`Error processing exam: ${e.message}`);
+        allItems.forEach(item => {
+            const isDone = completedIds.has(item.id);
+            if (isDone) totalCompleted++;
+            else remainingItems.push(item);
+
+            const t = (item.typeName || '').toLowerCase();
+            if (t === 'lecture') categories.videos++;
+            else if (t === 'supplement') categories.readings++;
+            else if (t.includes('discussion')) categories.discussions++;
+            else if (t.includes('dialogue') || t.includes('roleplay')) categories.dialogues++;
+            else if (t.includes('lti') || t.includes('lab')) categories.labs++;
+            else if (['exam', 'gradedquiz', 'gradedassignment'].includes(t)) categories.graded++;
+            else categories.quizzes++;
+        });
+
+        const overallPercent = allItems.length > 0 ? Math.round((totalCompleted / allItems.length) * 100) : 0;
+
+        const reportData = {
+            courseTitle: courseTitle,
+            courseSlug: courseSlug,
+            totalItems: allItems.length,
+            completedItems: totalCompleted,
+            percent: overallPercent,
+            modules: moduleReports,
+            categories: categories,
+            remainingItems: remainingItems
+        };
+
+        // 4. Output rich console log summary
+        log(`========================================`);
+        log(`📊 COURSE COMPLETION REPORT: ${courseTitle}`);
+        log(`🏆 Overall Progress: ${overallPercent}% (${totalCompleted}/${allItems.length} Completed)`);
+        log(`📁 Module Coverage:`);
+        moduleReports.forEach(m => {
+            const icon = m.isComplete ? '✓' : '⏳';
+            log(`  ${icon} [${m.percent}%] ${m.moduleName} (${m.completedCount}/${m.totalCount})`);
+        });
+        if (remainingItems.length > 0) {
+            log(`⏳ Remaining Items (${remainingItems.length}):`);
+            remainingItems.slice(0, 5).forEach(r => {
+                log(`  • [${r.moduleName}] ${r.name} (${r.typeName})`);
+            });
+            if (remainingItems.length > 5) {
+                log(`  ...and ${remainingItems.length - 5} more`);
+            }
+        } else {
+            log(`🎉 All modules and items are 100% completed!`);
+        }
+        log(`========================================`);
+
+        // Send report to popup UI
+        chrome.runtime.sendMessage({ action: "summary_report", data: reportData }).catch(() => {});
+        return reportData;
+
+    } catch (err) {
+        log(`Notice on generating summary report: ${err.message}`);
     }
 }
 

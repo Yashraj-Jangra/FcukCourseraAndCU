@@ -74,8 +74,8 @@ apiKeyInput.addEventListener('input', saveSettings);
 modelInput.addEventListener('input', saveSettings);
 endpointInput.addEventListener('input', saveSettings);
 
-// Load saved settings
-chrome.storage.local.get(['aiProvider', 'aiApiKey', 'aiModel', 'aiEndpoint', 'geminiApiKey'], (result) => {
+// Load saved settings & summary report
+chrome.storage.local.get(['aiProvider', 'aiApiKey', 'aiModel', 'aiEndpoint', 'geminiApiKey', 'latestSummaryReport'], (result) => {
     if (result.aiProvider) {
         providerSelect.value = result.aiProvider;
     }
@@ -89,6 +89,10 @@ chrome.storage.local.get(['aiProvider', 'aiApiKey', 'aiModel', 'aiEndpoint', 'ge
         endpointInput.value = result.aiEndpoint;
     }
     updateProviderUI(providerSelect.value);
+
+    if (result.latestSummaryReport) {
+        renderSummaryReport(result.latestSummaryReport);
+    }
 });
 
 function getAIConfig() {
@@ -180,6 +184,115 @@ document.getElementById('copyLogBtn').addEventListener('click', () => {
 
 document.getElementById('clearLogBtn').addEventListener('click', () => {
     logContainer.innerHTML = '';
+});
+
+// Summary Report Modal Handler
+const reportModal = document.getElementById('reportModal');
+const reportBody = document.getElementById('reportBody');
+const copyReportBtn = document.getElementById('copyReportBtn');
+
+document.getElementById('openReportBtn').addEventListener('click', () => {
+    reportModal.style.display = 'block';
+});
+
+document.getElementById('closeReportBtn').addEventListener('click', () => {
+    reportModal.style.display = 'none';
+});
+
+let currentRawReportText = "";
+
+function renderSummaryReport(data) {
+    if (!data) return;
+
+    const { courseTitle, totalItems, completedItems, percent, modules, categories, remainingItems } = data;
+    
+    let html = `
+        <div class="report-card">
+            <div style="font-size: 11px; font-weight: 700; color: #f1f5f9; margin-bottom: 4px;">${courseTitle || 'Course Summary'}</div>
+            <div style="display: flex; justify-content: space-between; font-size: 10px; color: #94a3b8; margin-bottom: 5px;">
+                <span>Overall Completion</span>
+                <span style="font-weight: bold; color: ${percent >= 100 ? '#4ade80' : '#38bdf8'};">${percent}% (${completedItems}/${totalItems})</span>
+            </div>
+            <div style="background: #1e293b; height: 6px; border-radius: 3px; overflow: hidden;">
+                <div style="background: linear-gradient(90deg, #3b82f6, #10b981); height: 100%; width: ${percent}%;"></div>
+            </div>
+        </div>
+
+        <div class="report-card">
+            <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px;">📁 Modules Coverage</div>
+    `;
+
+    (modules || []).forEach((m, idx) => {
+        const isDone = m.completedCount >= m.totalCount;
+        const badgeClass = isDone ? 'badge-done' : 'badge-progress';
+        const badgeText = isDone ? '100% DONE' : `${m.percent}% (${m.completedCount}/${m.totalCount})`;
+
+        html += `
+            <div class="module-item">
+                <span style="color: #cbd5e1; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    ${idx + 1}. ${m.moduleName}
+                </span>
+                <span class="report-badge ${badgeClass}">${badgeText}</span>
+            </div>
+        `;
+    });
+
+    html += `</div>`;
+
+    if (categories) {
+        html += `
+            <div class="report-card">
+                <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px;">📋 Category Summary</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 9px; color: #cbd5e1;">
+                    <div>🎬 Videos: <b>${categories.videos || 0}</b></div>
+                    <div>📖 Readings: <b>${categories.readings || 0}</b></div>
+                    <div>💬 Discussions: <b>${categories.discussions || 0}</b></div>
+                    <div>🎭 Dialogues: <b>${categories.dialogues || 0}</b></div>
+                    <div>🧪 Labs & LTI: <b>${categories.labs || 0}</b></div>
+                    <div>📝 Quizzes: <b>${categories.quizzes || 0}</b></div>
+                    <div>🎯 Graded: <b>${categories.graded || 0}</b></div>
+                </div>
+            </div>
+        `;
+    }
+
+    if (remainingItems && remainingItems.length > 0) {
+        html += `
+            <div class="report-card" style="border-left: 3px solid #f59e0b;">
+                <div style="font-size: 10px; font-weight: 700; color: #fde047; margin-bottom: 4px;">⏳ Remaining Items (${remainingItems.length})</div>
+                <div style="font-size: 9px; color: #94a3b8; line-height: 1.4;">
+        `;
+        remainingItems.slice(0, 8).forEach(item => {
+            html += `<div>• [${item.moduleName || 'Module'}] <b>${item.name}</b> (${item.typeName || 'item'})</div>`;
+        });
+        if (remainingItems.length > 8) {
+            html += `<div style="font-style: italic; margin-top: 3px;">+ ${remainingItems.length - 8} more items</div>`;
+        }
+        html += `</div></div>`;
+    } else {
+        html += `
+            <div class="report-card" style="border-left: 3px solid #22c55e; text-align: center; color: #86efac; font-size: 10px; font-weight: bold;">
+                🎉 All modules and items are fully completed!
+            </div>
+        `;
+    }
+
+    reportBody.innerHTML = html;
+    copyReportBtn.style.display = 'block';
+
+    // Store raw text for copying
+    currentRawReportText = `=== COURSE COMPLETION REPORT ===\nCourse: ${courseTitle}\nProgress: ${percent}% (${completedItems}/${totalItems})\n\nMODULES:\n` +
+        (modules || []).map(m => `- ${m.moduleName}: ${m.percent}% (${m.completedCount}/${m.totalCount})`).join('\n') +
+        `\n\nREMAINING (${(remainingItems || []).length}):\n` +
+        (remainingItems || []).map(r => `- [${r.moduleName}] ${r.name} (${r.typeName})`).join('\n');
+}
+
+copyReportBtn.addEventListener('click', () => {
+    if (!currentRawReportText) return;
+    navigator.clipboard.writeText(currentRawReportText).then(() => {
+        copyReportBtn.innerText = "✓ Copied Full Report!";
+        setTimeout(() => { copyReportBtn.innerText = "📋 Copy Full Report"; }, 1500);
+    });
 });
 
 // Stop Button
@@ -343,6 +456,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         
         document.getElementById('progressBar').style.width = percentage + '%';
         document.getElementById('progressText').innerText = `${percentage}% - ${message}`;
+    }
+    if (request.action === "summary_report") {
+        renderSummaryReport(request.data);
+        chrome.storage.local.set({ latestSummaryReport: request.data });
     }
     if (request.action === "finished") {
         setRunningUIState(false);

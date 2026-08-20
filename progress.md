@@ -3,12 +3,24 @@
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:
+- 🎯 **Added Graded Assignment Attempt Guardrails (Limited Attempts e.g. 3 Max)**:
+  - Detects `LIMITED_SUBMISSIONS`, `allowedAttempts`, `attemptCount`, `attemptsRemaining`, and `completedAttempts` via GraphQL.
+  - Automatically **skips** already-passed graded assignments (`isPassed === true`) to protect remaining attempts.
+  - Skips locked assignments when out of attempts (`remaining <= 0`) to prevent penalties.
+  - Transparently logs active attempts: `[Graded Assignment] Attempt 1/3 in progress... (Highest score will be kept)`.
+  - Captures and logs release grade results: `[Grade Result] Score: 100% - PASSED (✓)`.
+- 📊 **Added Comprehensive Course & Module Summary Report Generator (`generateCourseSummaryReport`)**:
+  - Automatically executes after full course completion or quiz solving.
+  - Computes overall course completion percentage and module-by-module coverage with status badges (`100% DONE`, `IN PROGRESS`).
+  - Categorizes all completed items (Videos, Readings, Discussions, Dialogues, Labs, Quizzes, Graded Assignments).
+  - Outlines exact remaining items list with module references.
+  - Displays real-time formatted summary in console and popup UI.
+- 📱 **Interactive Summary Report Modal in Popup UI**:
+  - Added **📊 Report** button in toolbar opening a modal overview with progress bars, module cards, and one-click **Copy Full Report**.
 - 🎭 **Added Top "End Conversation" Trigger for Dialogue Simulations**:
   - Implemented `triggerDialogueEndOptionInDOM` to automatically detect, click, and confirm the top **"End Conversation" / "End Dialogue"** action button in Coursera's dialogue header bar.
-  - Sends corresponding `endSession`, `endConversation`, and `complete` action transitions to `onDemandDialogueSessions.v1` and `onDemandDialogueCompletions.v1`.
 - ⚡ **Dynamic High-Speed Pacing for Fast Providers**:
   - Removed arbitrary 7s sleep delay for high-throughput providers (**Groq** runs at ~100ms, **OpenRouter** at ~300ms, and **Custom/Local LLMs** at ~200ms).
-  - Preserved a safe 4.5s cooldown only for **Google Gemini Free Tier** (to avoid 429 quota exhaustion).
 - 🛡️ **Added Anti-AI Disclosure Safeguards & Human Response Sanitization**:
   - Implemented `sanitizeHumanStudentResponse` to strip any robotic AI prefixes (`"As an AI..."`, `"As a language model..."`, `"Certainly! Here is..."`, `"Hope this helps!"`) and quotation marks.
   - Enforced strict prompt instructions commanding the model to act solely as a human student enrolled in the course, avoiding conversational preambles or AI disclosures.

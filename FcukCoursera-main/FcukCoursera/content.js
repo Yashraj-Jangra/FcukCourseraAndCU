@@ -756,10 +756,80 @@ async function completeGenericInteractiveItem(userId, courseId, courseSlug, item
     }
 }
 
-async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig) {
+/**
+ * Automatically detects and clicks the "End Conversation" / "End Dialogue" option
+ * in the top bar of interactive dialogue simulation items on Coursera.
+ */
+async function triggerDialogueEndOptionInDOM() {
+    try {
+        const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, input[type="button"]'));
+        
+        const endKeywords = [
+            'end conversation', 'end dialogue', 'end simulation', 'end chat', 
+            'end activity', 'finish dialogue', 'finish conversation', 'exit dialogue',
+            'complete dialogue', 'end session', 'finish session'
+        ];
+
+        let targetButton = null;
+
+        for (const el of candidates) {
+            const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            const testId = (el.getAttribute('data-testid') || '').toLowerCase();
+
+            if (endKeywords.some(kw => text === kw || text.includes(kw) || aria.includes(kw) || testId.includes(kw))) {
+                targetButton = el;
+                break;
+            }
+        }
+
+        // Secondary fallback: search top navigation or header buttons for "End"
+        if (!targetButton) {
+            const topBarButtons = Array.from(document.querySelectorAll('header button, [class*="header"] button, [class*="top"] button, [class*="dialogue"] button, [class*="toolbar"] button'));
+            for (const el of topBarButtons) {
+                const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                if (text === 'end' || text === 'finish' || text === 'exit') {
+                    targetButton = el;
+                    break;
+                }
+            }
+        }
+
+        if (targetButton) {
+            log(`[Dialogue UI] Found top option "${targetButton.innerText || 'End'}". Clicking to finish...`);
+            targetButton.click();
+
+            // Wait for confirmation modal
+            await new Promise(r => setTimeout(r, 400));
+
+            // Check if confirmation modal button appeared
+            const modalButtons = Array.from(document.querySelectorAll('[role="dialog"] button, .modal button, [class*="modal"] button, [class*="dialog"] button, [class*="confirm"] button'));
+            for (const mBtn of modalButtons) {
+                const mText = (mBtn.innerText || mBtn.textContent || '').trim().toLowerCase();
+                if (mText === 'end' || mText === 'yes' || mText === 'confirm' || mText === 'yes, end' || mText === 'finish' || mText.includes('end conversation') || mText.includes('confirm')) {
+                    log(`[Dialogue UI] Confirmed end modal.`);
+                    mBtn.click();
+                    break;
+                }
+            }
+            return true;
+        }
+    } catch(e) {
+        log(`Dialogue UI click notice: ${e.message}`);
+    }
+    return false;
+}
+
+async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig, courseContext = null) {
     try {
         log(`Processing Dialogue Simulation: ${item.name}...`);
         
+        // 1. Trigger DOM-based top End Conversation / End Dialogue action if open
+        const clickedDOM = await triggerDialogueEndOptionInDOM();
+        if (clickedDOM) {
+            await new Promise(r => setTimeout(r, 500));
+        }
+
         const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
         const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
         const headers = {
@@ -769,7 +839,23 @@ async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig
             'x-requested-with': 'XMLHttpRequest',
         };
 
-        // 1. Attempt to trigger dialogue session & completion REST APIs
+        // 2. Call backend End Session & Dialogue Completion Actions
+        const sessionActionEndpoints = [
+            `https://www.coursera.org/api/onDemandDialogueSessions.v1/${courseId}~${item.id}/actions?includes=progress`,
+            `https://www.coursera.org/api/onDemandDialogueSessions.v1/${item.id}/actions?includes=progress`
+        ];
+
+        const actionNames = ["endSession", "endConversation", "complete", "end"];
+        for (const ep of sessionActionEndpoints) {
+            for (const act of actionNames) {
+                try {
+                    const actionBody = JSON.stringify({ name: act, argument: [] });
+                    await fetch(ep, { method: 'POST', headers, body: actionBody, credentials: 'include' });
+                } catch(e) {}
+            }
+        }
+
+        // 3. Attempt REST completion & session updates
         const dialogueEndpoints = [
             `https://www.coursera.org/api/onDemandDialogueSessions.v1`,
             `https://www.coursera.org/api/onDemandDialogueCompletions.v1`,
@@ -783,18 +869,19 @@ async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig
                     itemId: item.id,
                     userId: Number(userId),
                     status: "COMPLETED",
+                    action: "END",
                     completed: true
                 });
                 await fetch(ep, { method: 'POST', headers, body, credentials: 'include' });
             } catch(e) {}
         }
 
-        // 2. Try GraphQL interactive attempt
+        // 4. Try GraphQL interactive attempt
         try {
-            await processUngradedAssignment(userId, courseId, item, aiConfig);
+            await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
         } catch(e) {}
 
-        // 3. Mark completion in course progress / supplement system
+        // 5. Mark completion in course progress / supplement system
         await completeSingleReading(userId, courseId, courseSlug, item.id);
         
         log(`[Dialogue Completed] ${item.name}`);

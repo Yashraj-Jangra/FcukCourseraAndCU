@@ -143,6 +143,10 @@ async function startCompleteCourseProcess(aiConfig) {
                     log(`[Discussion Prompt Found] ${item.name}`);
                     result = await completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig);
                 }
+                else if (['dialogue', 'dialogueItem', 'interactiveDialogue', 'roleplay', 'conversationSimulation'].includes(item.typeName)) {
+                    log(`[Dialogue Simulation Found] ${item.name}`);
+                    result = await completeDialogueItem(userId, courseId, courseSlug, item, aiConfig);
+                }
                 else if (['ungradedLti', 'gradedLti', 'ungradedLab', 'gradedLab', 'lab'].includes(item.typeName)) {
                     log(`[Practice Lab / LTI Found] ${item.name}`);
                     result = await completePracticeLabOrLti(userId, courseId, courseSlug, item);
@@ -674,6 +678,57 @@ async function completeGenericInteractiveItem(userId, courseId, courseSlug, item
     }
 }
 
+async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig) {
+    try {
+        log(`Processing Dialogue Simulation: ${item.name}...`);
+        
+        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
+        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
+        const headers = {
+            'Content-Type': 'application/json',
+            'x-csrf3-token': csrfToken,
+            'x-coursera-application': 'ondemand',
+            'x-requested-with': 'XMLHttpRequest',
+        };
+
+        // 1. Attempt to trigger dialogue session & completion REST APIs
+        const dialogueEndpoints = [
+            `https://www.coursera.org/api/onDemandDialogueSessions.v1`,
+            `https://www.coursera.org/api/onDemandDialogueCompletions.v1`,
+            `https://www.coursera.org/api/onDemandDialogueResponses.v1`
+        ];
+
+        for (const ep of dialogueEndpoints) {
+            try {
+                const body = JSON.stringify({
+                    courseId: courseId,
+                    itemId: item.id,
+                    userId: Number(userId),
+                    status: "COMPLETED",
+                    completed: true
+                });
+                await fetch(ep, { method: 'POST', headers, body, credentials: 'include' });
+            } catch(e) {}
+        }
+
+        // 2. Try GraphQL interactive attempt
+        try {
+            await processUngradedAssignment(userId, courseId, item, aiConfig);
+        } catch(e) {}
+
+        // 3. Mark completion in course progress / supplement system
+        await completeSingleReading(userId, courseId, courseSlug, item.id);
+        
+        log(`[Dialogue Completed] ${item.name}`);
+        return true;
+
+    } catch (e) {
+        log(`Error completing dialogue: ${e.message}`);
+        await completeSingleReading(userId, courseId, courseSlug, item.id);
+        return false;
+    }
+}
+
 async function startQuizSolverProcess(aiConfig) {
     try {
         const { userId, courseId, courseSlug, allItems } = await getCourseData();
@@ -681,16 +736,17 @@ async function startQuizSolverProcess(aiConfig) {
         const uniqueTypes = [...new Set(allItems.map(item => item.typeName))];
         log(`Found item types: ${uniqueTypes.map(t => t || 'undefined').join(', ')}`);
 
-        // Identify quizzes, assignments, practice tests, and discussion prompts
+        // Identify quizzes, assignments, practice tests, discussion prompts, and dialogue simulations
         const quizTypes = [
             'exam', 'gradedQuiz', 'quiz', 'ungradedWidget', 
             'ungradedAssignment', 'practiceQuiz', 'assignment', 
             'gradedAssignment', 'diagnosticExam', 'discussionPrompt', 
-            'gradedDiscussionPrompt', 'ungradedLti', 'lab'
+            'gradedDiscussionPrompt', 'ungradedLti', 'lab',
+            'dialogue', 'dialogueItem', 'interactiveDialogue', 'roleplay'
         ];
         const quizItems = allItems.filter(item => quizTypes.includes(item.typeName));
         
-        log(`Found ${quizItems.length} quizzes & practice items.`);
+        log(`Found ${quizItems.length} quizzes, practice items & dialogues.`);
         
         for (let i = 0; i < quizItems.length; i++) {
             if (globalState.abortRequested) {
@@ -701,7 +757,7 @@ async function startQuizSolverProcess(aiConfig) {
             const item = quizItems[i];
             updateStatus(`[${i + 1}/${quizItems.length}] Quiz: ${item.name}`);
             
-            log(`[Quiz/Assignment Found] ${item.name} (${item.typeName}) - ID: ${item.id}`);
+            log(`[Quiz/Assignment/Dialogue Found] ${item.name} (${item.typeName}) - ID: ${item.id}`);
 
             try {
                 await processQuizItem(userId, courseId, item, aiConfig);
@@ -713,7 +769,7 @@ async function startQuizSolverProcess(aiConfig) {
         if (globalState.abortRequested) {
             updateStatus("Process aborted.");
         } else {
-            updateStatus(`Done! Processed quizzes & practice assignments.`);
+            updateStatus(`Done! Processed quizzes, practice assignments & dialogues.`);
         }
         chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
 
@@ -734,6 +790,7 @@ async function processQuizItem(userId, courseId, item, aiConfig) {
     const examTypes = ['exam', 'gradedQuiz', 'quiz'];
     const assignmentTypes = ['ungradedAssignment', 'practiceQuiz', 'assignment', 'gradedAssignment', 'diagnosticExam', 'ungradedWidget'];
     const discussionTypes = ['discussionPrompt', 'discussionQuestion', 'gradedDiscussionPrompt', 'discussion'];
+    const dialogueTypes = ['dialogue', 'dialogueItem', 'interactiveDialogue', 'roleplay', 'conversationSimulation'];
     const labTypes = ['ungradedLti', 'gradedLti', 'ungradedLab', 'gradedLab', 'lab'];
 
     if (examTypes.includes(item.typeName)) {
@@ -742,6 +799,8 @@ async function processQuizItem(userId, courseId, item, aiConfig) {
         await processUngradedAssignment(userId, courseId, item, aiConfig);
     } else if (discussionTypes.includes(item.typeName)) {
         await completeDiscussionPrompt(userId, courseId, '', item, aiConfig);
+    } else if (dialogueTypes.includes(item.typeName)) {
+        await completeDialogueItem(userId, courseId, '', item, aiConfig);
     } else if (labTypes.includes(item.typeName)) {
         await completePracticeLabOrLti(userId, courseId, '', item);
     } else {

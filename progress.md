@@ -3,6 +3,9 @@
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:
+- 🎭 **Added Top "End Conversation" Trigger for Dialogue Simulations**:
+  - Implemented `triggerDialogueEndOptionInDOM` to automatically detect, click, and confirm the top **"End Conversation" / "End Dialogue"** action button in Coursera's dialogue header bar.
+  - Sends corresponding `endSession`, `endConversation`, and `complete` action transitions to `onDemandDialogueSessions.v1` and `onDemandDialogueCompletions.v1`.
 - ⚡ **Dynamic High-Speed Pacing for Fast Providers**:
   - Removed arbitrary 7s sleep delay for high-throughput providers (**Groq** runs at ~100ms, **OpenRouter** at ~300ms, and **Custom/Local LLMs** at ~200ms).
   - Preserved a safe 4.5s cooldown only for **Google Gemini Free Tier** (to avoid 429 quota exhaustion).

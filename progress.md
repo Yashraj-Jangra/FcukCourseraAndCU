@@ -3,6 +3,9 @@
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:
+- 🛡️ **Added Anti-AI Disclosure Safeguards & Human Response Sanitization**:
+  - Implemented `sanitizeHumanStudentResponse` to strip any robotic AI prefixes (`"As an AI..."`, `"As a language model..."`, `"Certainly! Here is..."`, `"Hope this helps!"`) and quotation marks.
+  - Enforced strict prompt instructions commanding the model to act solely as a human student enrolled in the course, avoiding conversational preambles or AI disclosures.
 - 🧠 **Added Course-Aware & Assignment-Context-Aware AI Prompting**:
   - Injects `courseTitle`, `courseSlug`, `moduleName`, and current `assignmentName` directly into quiz question prompts and discussion prompts.
   - LLM receives full course domain context to ground its answers in the exact conventions, libraries, formulas, and terminology taught in that specific course.

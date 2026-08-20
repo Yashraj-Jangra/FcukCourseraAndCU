@@ -2143,11 +2143,24 @@ Strict Safety & Style Guidelines:
             log(`Error solving question ${q.id}: ${e.message}`);
         }
 
-        // Pacing delay between questions to stay safely under free-tier RPM limits (10 req/min)
-        // 7s between questions = max ~8 questions/min, well under the 10 RPM cap
+        // Dynamic pacing delay based on provider rate limits
         if (i < questions.length - 1 && !globalState.abortRequested) {
-            log(`Waiting 7s before next question to stay within API rate limits...`);
-            await new Promise(resolve => setTimeout(resolve, 7000));
+            const provider = (typeof aiConfig === 'object' && aiConfig?.provider) ? aiConfig.provider.toLowerCase() : 'gemini';
+            
+            if (provider === 'gemini') {
+                // Free-tier Gemini has strict 10-15 RPM quota
+                log(`[Gemini Pacing] Waiting 4.5s before next question...`);
+                await new Promise(resolve => setTimeout(resolve, 4500));
+            } else if (provider === 'groq') {
+                // Groq is ultra-fast with high RPM caps
+                await new Promise(resolve => setTimeout(resolve, 100));
+            } else if (provider === 'openrouter') {
+                // OpenRouter handles rapid sequential queries
+                await new Promise(resolve => setTimeout(resolve, 300));
+            } else {
+                // Custom / Local LLMs (Ollama, LM Studio, OpenAI)
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
         }
     }
 

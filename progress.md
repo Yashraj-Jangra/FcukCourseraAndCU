@@ -3,21 +3,19 @@
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:
-- ✨ **Added Dynamic Gemini Model Discovery (`getAvailableGeminiModels`)**:
-  - Automatically queries `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}` to discover active models available on the user's API key.
-  - Automatically handles retired model names (`gemini-1.5-flash`, `gemini-2.0-flash` returning 404) by querying live endpoints like `gemini-2.5-flash` and `gemini-2.5-pro`.
-  - Added smart quota cooldown on `429` errors (4s -> 8s -> 12s) to allow RPM/TPM quota windows to reset cleanly.
-- 🐛 **Fixed Gemini API 429 Error & Model Endpoints**:
-  - Replaced hardcoded legacy model names with dynamic discovery.
-  - Added exponential backoff retry logic on `429`, `503`, and `500` status codes.
+- 🚀 **Added Multi-AI Provider Support (OpenRouter, Groq, Custom/Local LLMs, Gemini)**:
+  - **OpenRouter Support**: Direct integration with `https://openrouter.ai/api/v1/chat/completions` (free models like `meta-llama/llama-3.3-70b-instruct:free`, `google/gemini-2.0-flash-exp:free`, `deepseek/deepseek-r1:free`).
+  - **Groq Support**: Direct ultra-fast inference with `llama-3.3-70b-versatile` via `https://api.groq.com/openai/v1/chat/completions`.
+  - **Custom OpenAI-Compatible & Local LLM Support**: Supports any standard endpoint (Ollama `http://localhost:11434/v1/chat/completions`, LM Studio, DeepSeek, etc.) with custom model names and authentication tokens.
+  - **Popup Settings UI**: Added sleek provider dropdown, dynamic model selector, and custom endpoint field with auto-save to `chrome.storage.local`.
+- ✨ **Added Dynamic Gemini Model Discovery & Filtering**:
+  - Automatically queries Google AI Studio API for active text models while filtering out non-text specialty models (`tts`, `image`, `embedding`).
+  - Added smart quota cooldown on `429` errors and safe 7s quiz pacing.
 - 🧹 **Cleaned Up Solver Logic & Removed Duplicate Code**:
-  - Eliminated corrupted duplicate `callGemini` function definition at line 1916 that shadowed `processExamItem`.
-  - Corrected error propagation so failure returns `null` rather than passing error strings into option matchers.
-- 🧠 **Enhanced Option Matching Engine**:
-  - Implemented a 4-tier matching algorithm (Numbers, Letters, Semantic text matches, and Numeric floats).
+  - Eliminated corrupted duplicate `callGemini` function definition that shadowed `processExamItem`.
+  - Added 4-tier intelligent option matcher and reflection/numeric question support.
 - 🛑 **Added Cancellation / Abort Controller**:
-  - Added `abortRequested` state to cleanly stop ongoing operations when user clicks "Stop Process" in popup.
-  - Added dark-mode polished Stop button and scroll-safe log container in `popup.html` and `popup.js`.
+  - Added `abortRequested` state and Stop button to safely abort any in-progress task.
 
 ### What's Planned Next / Future Considerations:
 - Test live across a broad variety of Coursera course formats (e.g. specialized peer-review assignments).

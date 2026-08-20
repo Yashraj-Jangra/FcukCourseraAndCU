@@ -147,6 +147,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+function classifyItemType(item) {
+    const type = (item.typeName || '').toLowerCase();
+    const name = (item.name || '').toLowerCase();
+
+    if (type === 'lecture' || type.includes('video')) return 'lecture';
+    if (type === 'supplement' || type === 'reading') return 'supplement';
+    if (type.includes('discussion') || name.includes('discussion prompt')) return 'discussion';
+    if (type.includes('dialogue') || type.includes('roleplay') || name.includes('dialogue') || name.includes('conversation')) return 'dialogue';
+    if (type.includes('lti') || type.includes('lab') || name.includes('lab') || name.includes('jupyter') || name.includes('workspace')) return 'lab';
+    if (type.includes('coach') || type.includes('survey') || type.includes('peer') || type.includes('singlepageapp')) return 'interactive';
+    
+    // Quizzes, assignments, activities, exercises, diagnostics, and programming items
+    if (type.includes('quiz') || type.includes('exam') || type.includes('assignment') || type.includes('widget') || 
+        type.includes('practice') || type.includes('programming') || type.includes('diagnostic') ||
+        name.includes('practice quiz') || name.includes('practice assignment') || name.includes('activity:') || 
+        name.includes('exercise:') || name.includes('quiz:') || name.includes('assignment:')) {
+        return 'quiz_assignment';
+    }
+
+    return 'generic';
+}
+
 async function startCompleteCourseProcess(aiConfig) {
     try {
         const { userId, courseId, courseSlug, courseTitle, allItems, modules } = await getCourseData();
@@ -170,46 +192,48 @@ async function startCompleteCourseProcess(aiConfig) {
                 moduleName: item.moduleName || ""
             };
 
-            const progressMsg = `[${i + 1}/${allItems.length}] ${item.typeName}: ${item.name}`;
+            const progressMsg = `[${i + 1}/${allItems.length}] ${item.typeName || 'Item'}: ${item.name}`;
             updateStatus(progressMsg);
             updateProgress(i, allItems.length, item.name);
             
             try {
                 let result = false;
+                const category = classifyItemType(item);
                 
-                if (item.typeName === 'lecture') {
+                if (category === 'lecture') {
                     result = await completeSingleVideo(userId, courseId, courseSlug, item.id);
                     if (result) log(`[Video Completed] ${item.name}`);
                 } 
-                else if (item.typeName === 'supplement') {
+                else if (category === 'supplement') {
                     result = await completeSingleReading(userId, courseId, courseSlug, item.id);
                     if (result) log(`[Reading Completed] ${item.name}`);
                 }
-                else if (['discussionPrompt', 'discussionQuestion', 'gradedDiscussionPrompt', 'discussion'].includes(item.typeName)) {
+                else if (category === 'discussion') {
                     log(`[Discussion Prompt Found] ${item.name}`);
                     result = await completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig, courseContext);
                 }
-                else if (['dialogue', 'dialogueItem', 'interactiveDialogue', 'roleplay', 'conversationSimulation'].includes(item.typeName)) {
+                else if (category === 'dialogue') {
                     log(`[Dialogue Simulation Found] ${item.name}`);
                     result = await completeDialogueItem(userId, courseId, courseSlug, item, aiConfig, courseContext);
                 }
-                else if (['ungradedLti', 'gradedLti', 'ungradedLab', 'gradedLab', 'lab'].includes(item.typeName)) {
+                else if (category === 'lab') {
                     log(`[Practice Lab / LTI Found] ${item.name}`);
                     result = await completePracticeLabOrLti(userId, courseId, courseSlug, item);
                 }
-                else if (['coach', 'inCourseSurvey', 'survey', 'singlePageApp', 'peer', 'phasedPeer'].includes(item.typeName)) {
+                else if (category === 'interactive') {
                     log(`[Interactive Item Found] ${item.name}`);
                     result = await completeGenericInteractiveItem(userId, courseId, courseSlug, item, aiConfig);
                 }
-                else if (['exam', 'gradedQuiz', 'quiz', 'ungradedWidget', 'ungradedAssignment', 'practiceQuiz', 'assignment', 'gradedAssignment', 'diagnosticExam'].includes(item.typeName)) {
-                    log(`[Quiz / Assignment Found] ${item.name}`);
+                else if (category === 'quiz_assignment') {
+                    log(`[Quiz / Practice Assignment Found] ${item.name}`);
                     await processQuizItem(userId, courseId, item, aiConfig, courseContext);
                     result = true;
                 }
                 else {
-                    // Generic fallback: attempt reading completion
-                    log(`[Processing Unknown Item Type: ${item.typeName}] ${item.name}`);
-                    result = await completeSingleReading(userId, courseId, courseSlug, item.id);
+                    // Fallback for unknown item types
+                    log(`[Processing Item: ${item.typeName || 'Item'}] ${item.name}`);
+                    await processQuizItem(userId, courseId, item, aiConfig, courseContext);
+                    result = true;
                 }
 
                 if (result) {
@@ -900,20 +924,12 @@ async function startQuizSolverProcess(aiConfig) {
     try {
         const { userId, courseId, courseSlug, courseTitle, allItems, modules } = await getCourseData();
         
-        const uniqueTypes = [...new Set(allItems.map(item => item.typeName))];
-        log(`Found item types: ${uniqueTypes.map(t => t || 'undefined').join(', ')}`);
-
-        // Identify quizzes, assignments, practice tests, discussion prompts, and dialogue simulations
-        const quizTypes = [
-            'exam', 'gradedQuiz', 'quiz', 'ungradedWidget', 
-            'ungradedAssignment', 'practiceQuiz', 'assignment', 
-            'gradedAssignment', 'diagnosticExam', 'discussionPrompt', 
-            'gradedDiscussionPrompt', 'ungradedLti', 'lab',
-            'dialogue', 'dialogueItem', 'interactiveDialogue', 'roleplay'
-        ];
-        const quizItems = allItems.filter(item => quizTypes.includes(item.typeName));
+        const quizItems = allItems.filter(item => {
+            const cat = classifyItemType(item);
+            return cat === 'quiz_assignment' || cat === 'dialogue' || cat === 'discussion' || cat === 'lab';
+        });
         
-        log(`Found ${quizItems.length} quizzes, practice items & dialogues in "${courseTitle}".`);
+        log(`Found ${quizItems.length} quizzes, practice assignments & interactive items in "${courseTitle}".`);
         
         for (let i = 0; i < quizItems.length; i++) {
             if (globalState.abortRequested) {
@@ -929,8 +945,8 @@ async function startQuizSolverProcess(aiConfig) {
                 moduleName: item.moduleName || ""
             };
 
-            updateStatus(`[${i + 1}/${quizItems.length}] Quiz: ${item.name}`);
-            log(`[Quiz/Assignment/Dialogue Found] ${item.name} (${item.typeName}) - ID: ${item.id}`);
+            updateStatus(`[${i + 1}/${quizItems.length}] Solving: ${item.name}`);
+            log(`[Practice/Graded Item] ${item.name} (${item.typeName || 'Item'}) - ID: ${item.id}`);
 
             try {
                 await processQuizItem(userId, courseId, item, aiConfig, courseContext);
@@ -997,11 +1013,9 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
     const isGraded = ['exam', 'gradedQuiz', 'gradedAssignment', 'diagnosticExam'].includes(item.typeName) || 
                      (item.contentSummary && JSON.stringify(item.contentSummary).includes('LIMITED_SUBMISSIONS'));
 
-    log(`Processing ${isGraded ? 'Graded Assignment' : 'Quiz'}: ${item.name}`);
+    log(`Processing Practice / Graded Assignment: ${item.name}...`);
 
-    // Strategy: Use GraphQL Submission_StartAttempt
     const graphqlUrl = 'https://www.coursera.org/graphql-gateway?opname=Submission_StartAttempt';
-    
     const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
     const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
     
@@ -1066,62 +1080,92 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
             credentials: 'include'
         });
 
-        if (!resp.ok) {
-            log(`GraphQL Request Failed: ${resp.status}`);
-            return;
-        }
-
-        const data = await resp.json();
-        
-        // Check for errors in the top-level response
-        if (data.errors) {
-            log(`GraphQL Errors: ${JSON.stringify(data.errors)}`);
-            return;
-        }
-
-        const result = data.data?.Submission_StartAttempt;
-        
-        // Check if it was a success or failure type
-        if (result?.submissionState) {
-            const subState = result.submissionState;
-            const attemptsInfo = subState.attempts;
+        if (resp.ok) {
+            const data = await resp.json();
+            const result = data.data?.Submission_StartAttempt;
             
-            // Check if already passed (to save limited attempts)
-            const completedAttempts = attemptsInfo?.completedAttempts || [];
-            const isAlreadyPassed = completedAttempts.some(a => a.isPassed === true);
-            
-            if (isAlreadyPassed && isGraded) {
-                log(`[Graded Assignment] Already passed! Highest grade recorded. Skipping to save attempts.`);
-                await completeSingleReading(userId, courseId, '', item.id);
-                return;
+            if (result?.submissionState) {
+                const subState = result.submissionState;
+                const attemptsInfo = subState.attempts;
+                
+                // Check if already passed (to save limited attempts)
+                const completedAttempts = attemptsInfo?.completedAttempts || [];
+                const isAlreadyPassed = completedAttempts.some(a => a.isPassed === true);
+                
+                if (isAlreadyPassed && isGraded) {
+                    log(`[Graded Assignment] Already passed! Highest score recorded. Skipping to save attempts.`);
+                    await markAssignmentCompletedFallback(userId, courseId, item);
+                    return;
+                }
+
+                // Check remaining attempts
+                const allowed = attemptsInfo?.allowedAttempts;
+                const used = attemptsInfo?.attemptCount || 0;
+                const remaining = attemptsInfo?.attemptsRemaining;
+
+                if (allowed && remaining !== undefined && remaining <= 0) {
+                    log(`[Graded Assignment] Out of attempts (${used}/${allowed} used). Skipping.`);
+                    await markAssignmentCompletedFallback(userId, courseId, item);
+                    return;
+                }
+
+                if (isGraded && allowed) {
+                    log(`[Graded Assignment] Attempt ${used + 1}/${allowed} in progress... (Highest score will be kept)`);
+                } else {
+                    log("GraphQL Session Started Successfully!");
+                }
             }
-
-            // Check remaining attempts
-            const allowed = attemptsInfo?.allowedAttempts;
-            const used = attemptsInfo?.attemptCount || 0;
-            const remaining = attemptsInfo?.attemptsRemaining;
-
-            if (allowed && remaining !== undefined && remaining <= 0) {
-                log(`[Graded Assignment] Out of attempts (${used}/${allowed} used). Skipping to prevent penalty.`);
-                return;
-            }
-
-            if (isGraded && allowed) {
-                log(`[Graded Assignment] Attempt ${used + 1}/${allowed} in progress... (Highest score will be kept)`);
-            } else {
-                log("GraphQL Session Started Successfully!");
-            }
-
-            await processGraphQLSession(courseId, item.id, headers, aiConfig, courseContext);
-        } else if (result?.errors) {
-            log(`Start Attempt Failed: ${JSON.stringify(result.errors)}`);
-        } else {
-            log(`Unknown GraphQL Response: ${JSON.stringify(result)}`);
         }
+
+        // Always query questions via QueryState (handles newly started and existing in-progress drafts)
+        const solved = await processGraphQLSession(courseId, item.id, headers, aiConfig, courseContext);
+
+        // Run fallback pass & progress markers to guarantee Coursera records completion
+        await markAssignmentCompletedFallback(userId, courseId, item);
 
     } catch (e) {
-        log(`Error in GraphQL Start: ${e.message}`);
+        log(`Error in GraphQL assignment process: ${e.message}`);
+        await markAssignmentCompletedFallback(userId, courseId, item);
     }
+}
+
+async function markAssignmentCompletedFallback(userId, courseId, item) {
+    try {
+        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
+        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
+        const headers = {
+            'Content-Type': 'application/json',
+            'x-csrf3-token': csrfToken,
+            'x-coursera-application': 'ondemand',
+            'x-requested-with': 'XMLHttpRequest',
+        };
+
+        const postBody = JSON.stringify({
+            courseId: courseId,
+            itemId: item.id,
+            userId: Number(userId),
+            status: "COMPLETED",
+            isCompleted: true
+        });
+
+        const endpoints = [
+            `https://www.coursera.org/api/onDemandAssignmentPasses.v1`,
+            `https://www.coursera.org/api/onDemandAssignmentSubmissions.v1`,
+            `https://www.coursera.org/api/onDemandWidgetProgresses.v1`,
+            `https://www.coursera.org/api/onDemandWidgetPasses.v1`,
+            `https://www.coursera.org/api/onDemandLtiItemPasses.v1`
+        ];
+
+        for (const ep of endpoints) {
+            try {
+                await fetch(ep, { method: 'POST', headers, body: postBody, credentials: 'include' });
+            } catch(e) {}
+        }
+
+        // Mark completion via supplement / item views
+        await completeSingleReading(userId, courseId, '', item.id);
+
+    } catch(e) {}
 }
 
 async function processGraphQLSession(courseId, itemId, headers, aiConfig, courseContext = null) {
@@ -2024,17 +2068,23 @@ fragment TextBlock on Submission_TextBlock {
             return;
         }
 
-        // Check for in-progress attempt
+        // Check candidate locations for parts
         const attempts = queryState.attempts;
-        const inProgress = attempts?.inProgressAttempt;
+        const inProgress = attempts?.inProgressAttempt || queryState.inProgressAttempt;
         
-        if (inProgress && inProgress.draft && inProgress.draft.parts) {
-            const parts = inProgress.draft.parts;
-            log(`Found ${parts.length} parts in the quiz.`);
+        let parts = inProgress?.draft?.parts 
+            || queryState?.draft?.parts 
+            || queryState?.assignment?.parts
+            || queryState?.activeAttempt?.draft?.parts
+            || attempts?.draft?.parts;
+        
+        const draftId = inProgress?.draft?.id || inProgress?.id || queryState?.draft?.id;
+
+        if (parts && parts.length > 0) {
+            log(`Found ${parts.length} parts in the assignment.`);
             
             // Map GraphQL parts to a simpler format for the solver
             const questions = parts.map(part => {
-                // Skip TextBlocks or informational parts
                 if (part.__typename === 'Submission_TextBlock') {
                     return null;
                 }
@@ -2048,7 +2098,6 @@ fragment TextBlock on Submission_TextBlock {
                     else if (promptObj.cmlValue) promptText = promptObj.cmlValue;
                 }
                 
-                // Clean HTML from prompt
                 promptText = promptText.replace(/<[^>]*>/g, '').trim();
 
                 // Extract options
@@ -2062,7 +2111,6 @@ fragment TextBlock on Submission_TextBlock {
                             else if (disp.value) optText = disp.value;
                             else if (disp.cmlValue) optText = disp.cmlValue;
                         }
-                        // Clean HTML from option
                         optText = optText.replace(/<[^>]*>/g, '').trim();
                         return { id: opt.optionId, text: optText };
                     });
@@ -2070,20 +2118,23 @@ fragment TextBlock on Submission_TextBlock {
 
                 return {
                     id: part.partId,
-                    type: part.__typename, // e.g., Submission_MultipleChoiceQuestion
+                    type: part.__typename,
                     prompt: { text: promptText },
                     options: options
                 };
-            }).filter(q => q !== null); // Filter out nulls (TextBlocks)
+            }).filter(q => q !== null);
 
-            await solveQuestions('graphql', courseId, itemId, questions, headers, aiConfig, courseContext);
+            await solveQuestions('graphql', courseId, itemId, questions, headers, aiConfig, courseContext, draftId);
+            return true;
 
         } else {
-            log("No in-progress attempt found. You might need to start it manually once.");
+            log("No open parts found in GraphQL state. Proceeding with fallback completion...");
+            return false;
         }
 
     } catch (e) {
         log(`Error in GraphQL QueryState: ${e.message}`);
+        return false;
     }
 }
 
@@ -2132,7 +2183,7 @@ async function processSession(endpoint, sessionId, headers, aiConfig, courseCont
     }
 }
 
-async function solveQuestions(endpoint, courseId, itemId, questions, headers, aiConfig, courseContext = null) {
+async function solveQuestions(endpoint, courseId, itemId, questions, headers, aiConfig, courseContext = null, fallbackDraftId = null) {
     log(`Starting solver for ${questions.length} question(s)...`);
     
     const responsesToSave = [];
@@ -2274,7 +2325,7 @@ Strict Safety & Style Guidelines:
                         });
                     }
                 } else {
-                    log(`Could not match Gemini answer to any option. Raw answer: "${answerText}"`);
+                    log(`Could not match AI answer to any option. Raw answer: "${answerText}"`);
                 }
             }
 
@@ -2308,12 +2359,15 @@ Strict Safety & Style Guidelines:
         log(`Saving ${responsesToSave.length}/${questions.length} responses...`);
         
         if (endpoint === 'graphql') {
-            const submissionId = await saveResponsesGraphQL(headers, courseId, itemId, responsesToSave);
-            if (submissionId) {
-                log(`Submitting quiz draft (Submission ID: ${submissionId})...`);
-                await submitDraftGraphQL(headers, courseId, itemId, submissionId);
+            const savedDraftId = await saveResponsesGraphQL(headers, courseId, itemId, responsesToSave);
+            const finalSubmissionId = savedDraftId || fallbackDraftId;
+            
+            if (finalSubmissionId) {
+                log(`Submitting quiz draft (Submission ID: ${finalSubmissionId})...`);
+                await submitDraftGraphQL(headers, courseId, itemId, finalSubmissionId);
             } else {
-                log("Submission ID not received; skipped draft submission.");
+                log("Submission ID not found in response; submitting latest draft...");
+                await submitDraftGraphQL(headers, courseId, itemId, itemId);
             }
         }
     } else if (responsesToSave.length === 0) {

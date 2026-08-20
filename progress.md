@@ -3,18 +3,18 @@
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:
+- 🎭 **Added Interactive Dialogue & Roleplay Auto-Completion (`completeDialogueItem`)**:
+  - Automatically completes `dialogue`, `dialogueItem`, `interactiveDialogue`, and `roleplay` conversation simulation items.
+  - Interacts with `onDemandDialogueSessions.v1`, `onDemandDialogueCompletions.v1`, and GraphQL interactive schemas.
 - 💬 **Added AI-Powered Discussion Prompt Auto-Completion (`completeDiscussionPrompt`)**:
   - Automatically fetches discussion prompt questions (`onDemandDiscussionPrompts.v1`).
-  - Generates insightful, contextual 2-3 sentence student responses via configured AI (Gemini / OpenRouter / Groq / Custom LLM).
-  - Posts responses to Coursera's discussion forum endpoint (`onDemandDiscussionPromptResponses.v1`) and marks item completion.
+  - Generates insightful 2-3 sentence student responses via configured AI (Gemini / OpenRouter / Groq / Custom LLM) and submits them to `onDemandDiscussionPromptResponses.v1`.
 - 🧪 **Added Practice Assignment & Lab Auto-Completion (`completePracticeLabOrLti`)**:
-  - Automatically resolves and completes `ungradedLti`, `gradedLti`, `ungradedLab`, `lab`, and `ungradedWidget` items.
-  - Submits completion passes to `onDemandLtiItemPasses.v1` and `onDemandLtiLaunches.v1`.
+  - Automatically resolves and completes `ungradedLti`, `gradedLti`, `ungradedLab`, `lab`, and `ungradedWidget` items via `onDemandLtiItemPasses.v1` and `onDemandLtiLaunches.v1`.
 - 🤖 **Added Interactive & Coach Item Completion (`completeGenericInteractiveItem`)**:
-  - Handles `coach`, `inCourseSurvey`, `survey`, `singlePageApp`, and peer review placeholders with auto-fallback.
+  - Handles `coach`, `inCourseSurvey`, `survey`, and `singlePageApp` with auto-fallback.
 - 🚀 **Added Multi-AI Provider Support (OpenRouter, Groq, Custom/Local LLMs, Gemini)**:
-  - Supports OpenRouter (free models), Groq (high speed), Custom OpenAI-compatible endpoints (Ollama/DeepSeek), and Gemini.
-  - Dynamic model discovery with non-text filter, backoff cooldowns, and cancellation support.
+  - Supports OpenRouter, Groq, Custom OpenAI-compatible endpoints (Ollama/DeepSeek), and Gemini.
 
 ### What's Planned Next / Future Considerations:
 - Test live across a broad variety of Coursera course formats (e.g. specialized peer-review assignments).

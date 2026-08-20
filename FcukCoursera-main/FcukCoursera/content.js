@@ -8,12 +8,51 @@ let globalState = {
     logs: []
 };
 
-// Helper to log to popup
-function log(msg) {
-    console.log("[FcukCoursera]", msg);
-    globalState.logs.push(msg);
-    if (globalState.logs.length > 100) globalState.logs.shift();
-    chrome.runtime.sendMessage({ action: "log", data: msg }).catch(() => {});
+// Helper to log to popup with auto-categorization
+function log(msg, type = null) {
+    if (!type) {
+        const lower = String(msg || "").toLowerCase();
+        if (lower.includes('error') || lower.includes('failed') || lower.includes('failure') || lower.includes('could not')) {
+            type = 'error';
+        } else if (
+            lower.includes('completed') || 
+            lower.includes('success') || 
+            lower.includes('matched option') || 
+            lower.includes('[saved') || 
+            lower.includes('posted') || 
+            lower.includes('done!') ||
+            lower.includes('session started!') ||
+            lower.includes('quiz submitted')
+        ) {
+            type = 'success';
+        } else if (
+            lower.includes('cooling down') || 
+            lower.includes('rate limit') || 
+            lower.includes('warning') || 
+            lower.includes('retrying') || 
+            lower.includes('fallback') || 
+            lower.includes('skipping')
+        ) {
+            type = 'warning';
+        } else if (
+            lower.includes('asking') || 
+            lower.includes('response:') || 
+            lower.includes('using gemini') || 
+            lower.includes('discovered')
+        ) {
+            type = 'ai';
+        } else {
+            type = 'info';
+        }
+    }
+
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    const logItem = { text: msg, type: type, timestamp: timestamp };
+
+    console.log(`[FcukCoursera][${type.toUpperCase()}]`, msg);
+    globalState.logs.push(logItem);
+    if (globalState.logs.length > 250) globalState.logs.shift();
+    chrome.runtime.sendMessage({ action: "log", data: logItem }).catch(() => {});
 }
 
 function updateStatus(msg) {

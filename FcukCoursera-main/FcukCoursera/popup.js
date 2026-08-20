@@ -11,7 +11,6 @@ function setRunningUIState(isRunning) {
 
     if (isRunning) {
         document.getElementById('progressContainer').style.display = 'block';
-        document.getElementById('progressText').style.display = 'block';
     }
 }
 
@@ -22,6 +21,7 @@ const modelGroup = document.getElementById('modelGroup');
 const modelInput = document.getElementById('modelInput');
 const endpointGroup = document.getElementById('endpointGroup');
 const endpointInput = document.getElementById('endpointInput');
+const logContainer = document.getElementById('log');
 
 function updateProviderUI(provider) {
     if (provider === 'openrouter') {
@@ -29,14 +29,14 @@ function updateProviderUI(provider) {
         apiKeyInput.placeholder = "sk-or-v1-...";
         modelGroup.style.display = 'block';
         if (!modelInput.value) modelInput.value = "meta-llama/llama-3.3-70b-instruct:free";
-        modelInput.placeholder = "e.g. meta-llama/llama-3.3-70b-instruct:free or google/gemini-2.0-flash-001";
+        modelInput.placeholder = "meta-llama/llama-3.3-70b-instruct:free";
         endpointGroup.style.display = 'none';
     } else if (provider === 'groq') {
         apiKeyLabel.innerText = "Groq API Key";
         apiKeyInput.placeholder = "gsk_...";
         modelGroup.style.display = 'block';
         if (!modelInput.value) modelInput.value = "llama-3.3-70b-versatile";
-        modelInput.placeholder = "e.g. llama-3.3-70b-versatile";
+        modelInput.placeholder = "llama-3.3-70b-versatile";
         endpointGroup.style.display = 'none';
     } else if (provider === 'custom') {
         apiKeyLabel.innerText = "Custom API Key / Bearer Token";
@@ -66,7 +66,6 @@ function saveSettings() {
         aiApiKey: apiKeyInput.value.trim(),
         aiModel: modelInput.value.trim(),
         aiEndpoint: endpointInput.value.trim(),
-        // Keep backwards compatibility
         geminiApiKey: apiKeyInput.value.trim()
     });
 }
@@ -112,6 +111,77 @@ function getAIConfig() {
     };
 }
 
+// Log Renderer with Color Coding
+function createLogElement(logItem) {
+    let text = "";
+    let type = "info";
+    let timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+    if (typeof logItem === 'object' && logItem !== null) {
+        text = logItem.text || "";
+        type = logItem.type || "info";
+        if (logItem.timestamp) timestamp = logItem.timestamp;
+    } else {
+        text = String(logItem || "");
+        const lower = text.toLowerCase();
+        if (lower.includes('error') || lower.includes('failed') || lower.includes('failure') || lower.includes('could not')) {
+            type = 'error';
+        } else if (lower.includes('completed') || lower.includes('success') || lower.includes('matched option') || lower.includes('saved') || lower.includes('posted') || lower.includes('done!')) {
+            type = 'success';
+        } else if (lower.includes('cooling down') || lower.includes('warning') || lower.includes('rate limit') || lower.includes('retrying') || lower.includes('fallback') || lower.includes('skipping')) {
+            type = 'warning';
+        } else if (lower.includes('asking') || lower.includes('response:') || lower.includes('discovered')) {
+            type = 'ai';
+        }
+    }
+
+    const entry = document.createElement('div');
+    entry.className = `log-entry log-${type}`;
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'log-time';
+    timeSpan.innerText = timestamp;
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'log-text';
+    textSpan.innerText = text;
+
+    entry.appendChild(timeSpan);
+    entry.appendChild(textSpan);
+    return entry;
+}
+
+function appendLog(logItem) {
+    const el = createLogElement(logItem);
+    logContainer.appendChild(el);
+    if (logContainer.children.length > 250) {
+        logContainer.removeChild(logContainer.firstChild);
+    }
+    logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+// Toolbar: Copy & Clear Logs
+document.getElementById('copyLogBtn').addEventListener('click', () => {
+    const rawLines = Array.from(logContainer.querySelectorAll('.log-entry')).map(el => {
+        const t = el.querySelector('.log-time')?.innerText || '';
+        const txt = el.querySelector('.log-text')?.innerText || '';
+        return `[${t}] ${txt}`;
+    }).join('\n');
+
+    if (!rawLines) return;
+
+    navigator.clipboard.writeText(rawLines).then(() => {
+        const btn = document.getElementById('copyLogBtn');
+        const oldText = btn.innerText;
+        btn.innerText = "Copied!";
+        setTimeout(() => { btn.innerText = oldText; }, 1500);
+    });
+});
+
+document.getElementById('clearLogBtn').addEventListener('click', () => {
+    logContainer.innerHTML = '';
+});
+
 // Stop Button
 document.getElementById('stopBtn').addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -134,7 +204,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Starting...";
+    document.getElementById('status').innerText = "Starting Video Skip...";
 
     chrome.tabs.sendMessage(tab.id, { action: "start_skipping" }, (response) => {
         if (chrome.runtime.lastError) {
@@ -153,7 +223,7 @@ document.getElementById('readBtn').addEventListener('click', async () => {
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Starting Readings...";
+    document.getElementById('status').innerText = "Starting Reading Completion...";
 
     chrome.tabs.sendMessage(tab.id, { action: "start_reading_completion" }, (response) => {
         if (chrome.runtime.lastError) {
@@ -174,20 +244,17 @@ document.getElementById('readBtn').addEventListener('click', async () => {
                 setRunningUIState(true);
                 document.getElementById('status').innerText = response.statusMessage;
                 
-                const logDiv = document.getElementById('log');
-                logDiv.innerHTML = '';
+                logContainer.innerHTML = '';
                 if (response.logs && response.logs.length > 0) {
                     response.logs.forEach(msg => {
-                        const entry = document.createElement('div');
-                        entry.innerText = msg;
-                        logDiv.appendChild(entry);
+                        appendLog(msg);
                     });
-                    logDiv.scrollTop = logDiv.scrollHeight;
                 }
 
                 if (response.progress && response.progress.total > 0) {
                     const { current, total, message } = response.progress;
                     const percentage = Math.round((current / total) * 100);
+                    document.getElementById('progressContainer').style.display = 'block';
                     document.getElementById('progressBar').style.width = percentage + '%';
                     document.getElementById('progressText').innerText = `${percentage}% - ${message}`;
                 }
@@ -212,7 +279,7 @@ document.getElementById('quizBtn').addEventListener('click', async () => {
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Starting Quiz Solver...";
+    document.getElementById('status').innerText = "Starting Quiz & Practice Solver...";
 
     chrome.tabs.sendMessage(tab.id, { 
         action: "start_quiz_solver", 
@@ -259,14 +326,7 @@ document.getElementById('completeBtn').addEventListener('click', async () => {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "log") {
-        const logDiv = document.getElementById('log');
-        const entry = document.createElement('div');
-        entry.innerText = request.data;
-        logDiv.appendChild(entry);
-        if (logDiv.children.length > 150) {
-            logDiv.removeChild(logDiv.firstChild);
-        }
-        logDiv.scrollTop = logDiv.scrollHeight;
+        appendLog(request.data);
     }
     if (request.action === "status") {
         document.getElementById('status').innerText = request.data;
@@ -275,7 +335,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const { current, total, message } = request.data;
         
         document.getElementById('progressContainer').style.display = 'block';
-        document.getElementById('progressText').style.display = 'block';
 
         let percentage = 0;
         if (total > 0) {

@@ -2,45 +2,265 @@
 <html>
 <head>
   <style>
-    body { background-color: #121212; width: 320px; padding: 15px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #fff; margin: 0; box-sizing: border-box; }
-    button { width: 100%; padding: 10px; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 6px; border-radius: 6px; font-size: 12px; transition: opacity 0.2s; }
-    button:hover { opacity: 0.9; }
+    * { box-sizing: border-box; }
+    body { 
+      background-color: #0f1117; 
+      width: 340px; 
+      padding: 14px; 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; 
+      color: #f1f5f9; 
+      margin: 0; 
+      user-select: none;
+    }
     
-    .btn-blue { background-color: #0056D2; }
-    .btn-green { background-color: #28a745; }
-    .btn-purple { background-color: #6f42c1; }
-    .btn-pink { background-color: #d63384; }
-    .btn-red { background-color: #dc3545; }
+    .header-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #1e293b;
+    }
+    .header-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header-title img {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 1px solid #3b82f6;
+    }
+    .header-title h2 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #60a5fa, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
 
-    button:disabled { background-color: #333 !important; cursor: not-allowed; color: #777; opacity: 0.6; }
+    .btn-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    button { 
+      width: 100%; 
+      padding: 9px; 
+      color: white; 
+      border: none; 
+      cursor: pointer; 
+      font-weight: 600; 
+      border-radius: 6px; 
+      font-size: 11px; 
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      transition: all 0.15s ease;
+    }
+    button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+    button:active { transform: translateY(0); filter: brightness(0.95); }
     
+    .btn-blue { background: linear-gradient(135deg, #2563eb, #1d4ed8); }
+    .btn-green { background: linear-gradient(135deg, #16a34a, #15803d); }
+    .btn-purple { background: linear-gradient(135deg, #7c3aed, #6d28d9); }
+    .btn-pink { background: linear-gradient(135deg, #db2777, #be185d); }
+    .btn-red { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+
+    button:disabled { 
+      background: #1e293b !important; 
+      cursor: not-allowed; 
+      color: #64748b; 
+      opacity: 0.6;
+      transform: none !important;
+      filter: none !important;
+    }
+    
+    .settings-panel {
+      background: #141824;
+      border: 1px solid #1e293b;
+      border-radius: 7px;
+      padding: 9px;
+      margin-top: 8px;
+    }
+
     .input-group { margin-bottom: 6px; }
-    .input-label { font-size: 11px; color: #aaa; margin-bottom: 3px; display: block; }
-    input, select { width: 100%; box-sizing: border-box; padding: 7px 9px; background: #1e1e1e; color: #fff; border: 1px solid #3d3d3d; border-radius: 5px; font-size: 11px; outline: none; }
-    input:focus, select:focus { border-color: #0056D2; }
+    .input-group:last-child { margin-bottom: 0; }
+    .input-label { font-size: 10px; color: #94a3b8; margin-bottom: 2px; display: block; font-weight: 500; }
     
-    #status { margin-top: 10px; font-size: 12px; color: #aaa; font-weight: 500; text-align: center; }
-    .log { max-height: 140px; overflow-y: auto; background: #181818; color: #d0d0d0; padding: 8px; margin-top: 10px; font-size: 10px; border: 1px solid #2e2e2e; border-radius: 5px; line-height: 1.4; }
-    .log div { border-bottom: 1px solid #262626; padding: 2px 0; }
+    input, select { 
+      width: 100%; 
+      padding: 6px 8px; 
+      background: #090d16; 
+      color: #f1f5f9; 
+      border: 1px solid #273549; 
+      border-radius: 5px; 
+      font-size: 11px; 
+      outline: none; 
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: #3b82f6; }
+    
+    .progress-box {
+      margin-top: 8px;
+      display: none;
+    }
+    .progress-bar-bg {
+      background-color: #1e293b;
+      border-radius: 4px;
+      height: 6px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      background: linear-gradient(90deg, #3b82f6, #10b981);
+      height: 100%;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    .progress-label {
+      color: #94a3b8;
+      text-align: center;
+      font-size: 10px;
+      margin-top: 3px;
+      font-weight: 500;
+    }
+
+    #status { 
+      margin-top: 8px; 
+      font-size: 11px; 
+      color: #38bdf8; 
+      font-weight: 600; 
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Log Container & Toolbar */
+    .log-section {
+      margin-top: 8px;
+      background: #090d16;
+      border: 1px solid #1e293b;
+      border-radius: 7px;
+      overflow: hidden;
+    }
+    .log-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 8px;
+      background: #141824;
+      border-bottom: 1px solid #1e293b;
+      font-size: 10px;
+      font-weight: 600;
+      color: #94a3b8;
+    }
+    .log-actions {
+      display: flex;
+      gap: 4px;
+    }
+    .log-btn {
+      background: transparent;
+      border: 1px solid #273549;
+      color: #94a3b8;
+      padding: 2px 6px;
+      font-size: 9px;
+      border-radius: 3px;
+      cursor: pointer;
+      width: auto;
+      font-weight: 500;
+    }
+    .log-btn:hover {
+      background: #1e293b;
+      color: #f1f5f9;
+      transform: none;
+    }
+    
+    .log { 
+      height: 140px; 
+      overflow-y: auto; 
+      padding: 6px; 
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace; 
+      font-size: 10px; 
+      line-height: 1.45;
+      user-select: text;
+    }
+
+    .log-entry {
+      margin-bottom: 4px;
+      padding: 3px 6px;
+      border-radius: 4px;
+      border-left: 3px solid transparent;
+      word-break: break-word;
+      display: flex;
+      align-items: flex-start;
+      gap: 5px;
+    }
+    .log-time {
+      color: #475569;
+      font-size: 9px;
+      flex-shrink: 0;
+      padding-top: 1px;
+    }
+    .log-text {
+      flex-grow: 1;
+    }
+
+    /* Log Type Highlights */
+    .log-error {
+      background: rgba(239, 68, 68, 0.12);
+      border-left-color: #ef4444;
+      color: #fca5a5;
+    }
+    .log-success {
+      background: rgba(34, 197, 94, 0.12);
+      border-left-color: #22c55e;
+      color: #86efac;
+    }
+    .log-warning {
+      background: rgba(245, 158, 11, 0.12);
+      border-left-color: #f59e0b;
+      color: #fde047;
+    }
+    .log-ai {
+      background: rgba(56, 189, 248, 0.10);
+      border-left-color: #0ea5e9;
+      color: #7dd3fc;
+    }
+    .log-info {
+      background: rgba(148, 163, 184, 0.05);
+      border-left-color: #475569;
+      color: #cbd5e1;
+    }
   </style>
 </head>
 <body>
-  <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 12px;">
-    <img src="icon.jpg" style="width: 36px; height: 36px; margin-right: 10px; border-radius: 50%; object-fit: cover;">
-    <h2 style="margin: 0; color: #0066FF; font-size: 18px;">FcukCoursera</h2>
+  <div class="header-box">
+    <div class="header-title">
+      <img src="icon.jpg" alt="Logo">
+      <h2>FcukCoursera</h2>
+    </div>
+    <span style="font-size: 10px; color: #64748b; font-weight: 500;">v2.0 Pro</span>
   </div>
   
-  <button id="startBtn" class="btn-blue">Skip All Videos</button>
-  <button id="readBtn" class="btn-green">Skip All Readings</button>
+  <div class="btn-grid">
+    <button id="startBtn" class="btn-blue">▶ Skip Videos</button>
+    <button id="readBtn" class="btn-green">✓ Skip Readings</button>
+  </div>
 
-  <div style="margin-top: 12px; border-top: 1px solid #2a2a2a; padding-top: 10px;">
+  <div class="settings-panel">
     <div class="input-group">
       <label class="input-label" for="providerSelect">AI Provider</label>
       <select id="providerSelect">
-        <option value="gemini">Google Gemini (Default)</option>
+        <option value="gemini">Google Gemini (Free Tier)</option>
         <option value="openrouter">OpenRouter (Free & Paid)</option>
         <option value="groq">Groq (Ultra-Fast)</option>
-        <option value="custom">Custom OpenAI-Compatible / Local</option>
+        <option value="custom">Custom OpenAI / Local Ollama</option>
       </select>
     </div>
 
@@ -59,21 +279,33 @@
       <input type="text" id="endpointInput" placeholder="https://api.openai.com/v1/chat/completions">
     </div>
 
-    <button id="quizBtn" class="btn-purple">Solve Quizzes (AI)</button>
-    <button id="completeBtn" class="btn-pink">Complete Course (All-in-One)</button>
-    <button id="stopBtn" class="btn-red" style="display: none;">Stop Process</button>
+    <div style="margin-top: 8px;">
+      <button id="quizBtn" class="btn-purple" style="margin-bottom: 5px;">⚡ Solve Quizzes & Practice</button>
+      <button id="completeBtn" class="btn-pink">🚀 Complete Course (All-in-One)</button>
+      <button id="stopBtn" class="btn-red" style="display: none; margin-top: 5px;">🛑 Stop Process</button>
+    </div>
   </div>
   
-  <div id="progressContainer" style="margin-top: 10px; background-color: #262626; border-radius: 4px; height: 8px; display: none;">
-    <div id="progressBar" style="background-color: #28a745; height: 100%; width: 0%; border-radius: 4px; transition: width 0.3s;"></div>
+  <div id="progressContainer" class="progress-box">
+    <div class="progress-bar-bg">
+      <div id="progressBar" class="progress-bar-fill"></div>
+    </div>
+    <div id="progressText" class="progress-label">0%</div>
   </div>
-  <div id="progressText" style="color: #bbb; text-align: center; font-size: 10px; margin-top: 3px; display: none;">0%</div>
 
   <div id="status">Ready</div>
-  <div id="log" class="log"></div>
-  <div style="text-align: center; margin-top: 10px; font-size: 10px; color: #666;">
-    Made by Sookeyy
+
+  <div class="log-section">
+    <div class="log-header">
+      <span>Console Activity</span>
+      <div class="log-actions">
+        <button id="copyLogBtn" class="log-btn">Copy</button>
+        <button id="clearLogBtn" class="log-btn">Clear</button>
+      </div>
+    </div>
+    <div id="log" class="log"></div>
   </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

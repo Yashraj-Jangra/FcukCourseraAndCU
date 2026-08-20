@@ -149,9 +149,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 async function startCompleteCourseProcess(aiConfig) {
     try {
-        const { userId, courseId, courseSlug, allItems } = await getCourseData();
+        const { userId, courseId, courseSlug, courseTitle, allItems } = await getCourseData();
         
-        log(`Starting Course Completion. Found ${allItems.length} items.`);
+        log(`Starting Course Completion for "${courseTitle}". Found ${allItems.length} items.`);
         updateProgress(0, allItems.length, "Starting...");
 
         let completedCount = 0;
@@ -163,6 +163,13 @@ async function startCompleteCourseProcess(aiConfig) {
             }
 
             const item = allItems[i];
+            const courseContext = {
+                courseSlug: courseSlug,
+                courseTitle: courseTitle,
+                assignmentName: item.name,
+                moduleName: item.moduleName || ""
+            };
+
             const progressMsg = `[${i + 1}/${allItems.length}] ${item.typeName}: ${item.name}`;
             updateStatus(progressMsg);
             updateProgress(i, allItems.length, item.name);
@@ -180,11 +187,11 @@ async function startCompleteCourseProcess(aiConfig) {
                 }
                 else if (['discussionPrompt', 'discussionQuestion', 'gradedDiscussionPrompt', 'discussion'].includes(item.typeName)) {
                     log(`[Discussion Prompt Found] ${item.name}`);
-                    result = await completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig);
+                    result = await completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig, courseContext);
                 }
                 else if (['dialogue', 'dialogueItem', 'interactiveDialogue', 'roleplay', 'conversationSimulation'].includes(item.typeName)) {
                     log(`[Dialogue Simulation Found] ${item.name}`);
-                    result = await completeDialogueItem(userId, courseId, courseSlug, item, aiConfig);
+                    result = await completeDialogueItem(userId, courseId, courseSlug, item, aiConfig, courseContext);
                 }
                 else if (['ungradedLti', 'gradedLti', 'ungradedLab', 'gradedLab', 'lab'].includes(item.typeName)) {
                     log(`[Practice Lab / LTI Found] ${item.name}`);
@@ -196,7 +203,7 @@ async function startCompleteCourseProcess(aiConfig) {
                 }
                 else if (['exam', 'gradedQuiz', 'quiz', 'ungradedWidget', 'ungradedAssignment', 'practiceQuiz', 'assignment', 'gradedAssignment', 'diagnosticExam'].includes(item.typeName)) {
                     log(`[Quiz / Assignment Found] ${item.name}`);
-                    await processQuizItem(userId, courseId, item, aiConfig);
+                    await processQuizItem(userId, courseId, item, aiConfig, courseContext);
                     result = true;
                 }
                 else {
@@ -426,11 +433,13 @@ async function getCourseData() {
             moduleName: moduleMap[item.moduleId] || "Unknown Module"
         }));
 
+        const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
+        const courseTitle = cleanTitle || courseSlug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+        return { userId, courseId, courseSlug, courseTitle, allItems };
     } catch (e) {
         throw new Error("Error fetching syllabus: " + e.message);
     }
-
-    return { userId, courseId, courseSlug, allItems };
 }
 
 async function startReadingCompletionProcess() {
@@ -551,7 +560,7 @@ async function completeSingleReading(userId, courseId, courseSlug, itemId) {
     }
 }
 
-async function completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig) {
+async function completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig, courseContext = null) {
     try {
         log(`Processing Discussion Prompt: ${item.name}...`);
         
@@ -580,18 +589,20 @@ async function completeDiscussionPrompt(userId, courseId, courseSlug, item, aiCo
             }
         } catch(e) {}
 
-        // 2. Generate discussion response with AI
+        // 2. Generate course-aware discussion response with AI
         let responseBodyText = "In my analysis of this topic, applying structured methodologies and evaluating practical outcomes leads to the most robust and sustainable results.";
         
         if (aiConfig) {
             try {
-                const aiPrompt = `You are a student writing a brief, insightful, and professional response to a Coursera discussion prompt.
+                const courseInfo = courseContext?.courseTitle ? `Course: ${courseContext.courseTitle}\nTopic: ${courseContext.assignmentName || item.name}\n` : `Topic: ${item.name}\n`;
+                const aiPrompt = `You are an active, insightful student participating in a Coursera discussion forum.
 
+${courseInfo}
 Discussion Prompt:
 "${promptText}"
 
 Instructions:
-Write a thoughtful, direct 2-3 sentence contribution to this discussion forum.
+Write a thoughtful, direct 2-3 sentence contribution specifically tailored to the topic and concepts of ${courseContext?.courseTitle || 'this course'}.
 Do not include quotation marks or conversational preambles. Output only the response text.`;
 
                 const aiResponse = await callLLM(aiPrompt, aiConfig);
@@ -770,7 +781,7 @@ async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig
 
 async function startQuizSolverProcess(aiConfig) {
     try {
-        const { userId, courseId, courseSlug, allItems } = await getCourseData();
+        const { userId, courseId, courseSlug, courseTitle, allItems } = await getCourseData();
         
         const uniqueTypes = [...new Set(allItems.map(item => item.typeName))];
         log(`Found item types: ${uniqueTypes.map(t => t || 'undefined').join(', ')}`);
@@ -785,7 +796,7 @@ async function startQuizSolverProcess(aiConfig) {
         ];
         const quizItems = allItems.filter(item => quizTypes.includes(item.typeName));
         
-        log(`Found ${quizItems.length} quizzes, practice items & dialogues.`);
+        log(`Found ${quizItems.length} quizzes, practice items & dialogues in "${courseTitle}".`);
         
         for (let i = 0; i < quizItems.length; i++) {
             if (globalState.abortRequested) {
@@ -794,12 +805,18 @@ async function startQuizSolverProcess(aiConfig) {
             }
 
             const item = quizItems[i];
+            const courseContext = {
+                courseSlug: courseSlug,
+                courseTitle: courseTitle,
+                assignmentName: item.name,
+                moduleName: item.moduleName || ""
+            };
+
             updateStatus(`[${i + 1}/${quizItems.length}] Quiz: ${item.name}`);
-            
             log(`[Quiz/Assignment/Dialogue Found] ${item.name} (${item.typeName}) - ID: ${item.id}`);
 
             try {
-                await processQuizItem(userId, courseId, item, aiConfig);
+                await processQuizItem(userId, courseId, item, aiConfig, courseContext);
             } catch (err) {
                 log(`Failed to process ${item.name}: ${err.message}`);
             }
@@ -819,7 +836,7 @@ async function startQuizSolverProcess(aiConfig) {
     }
 }
 
-async function processQuizItem(userId, courseId, item, aiConfig) {
+async function processQuizItem(userId, courseId, item, aiConfig, courseContext = null) {
     log(`Processing ${item.name} (${item.typeName})...`);
     
     if (item.contentSummary) {
@@ -833,26 +850,31 @@ async function processQuizItem(userId, courseId, item, aiConfig) {
     const labTypes = ['ungradedLti', 'gradedLti', 'ungradedLab', 'gradedLab', 'lab'];
 
     if (examTypes.includes(item.typeName)) {
-        await processExamItem(userId, courseId, item, aiConfig);
+        await processExamItem(userId, courseId, item, aiConfig, courseContext);
     } else if (assignmentTypes.includes(item.typeName)) {
-        await processUngradedAssignment(userId, courseId, item, aiConfig);
+        await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
     } else if (discussionTypes.includes(item.typeName)) {
-        await completeDiscussionPrompt(userId, courseId, '', item, aiConfig);
+        await completeDiscussionPrompt(userId, courseId, '', item, aiConfig, courseContext);
     } else if (dialogueTypes.includes(item.typeName)) {
-        await completeDialogueItem(userId, courseId, '', item, aiConfig);
+        await completeDialogueItem(userId, courseId, '', item, aiConfig, courseContext);
     } else if (labTypes.includes(item.typeName)) {
         await completePracticeLabOrLti(userId, courseId, '', item);
     } else {
         // Fallback: try assignment solver, then reading completion
         try {
-            await processUngradedAssignment(userId, courseId, item, aiConfig);
+            await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
         } catch(e) {
             await completeSingleReading(userId, courseId, '', item.id);
         }
     }
 }
 
-async function processUngradedAssignment(userId, courseId, item, aiConfig) {
+async function processExamItem(userId, courseId, item, aiConfig, courseContext = null) {
+    log(`Processing Exam / Graded Quiz: ${item.name}...`);
+    await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
+}
+
+async function processUngradedAssignment(userId, courseId, item, aiConfig, courseContext = null) {
     log(`Attempting to process Ungraded Assignment: ${item.name}`);
 
     // Strategy: Use GraphQL Submission_StartAttempt
@@ -923,7 +945,7 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig) {
         // Check if it was a success or failure type
         if (result?.submissionState) {
             log("GraphQL Session Started Successfully!");
-            await processGraphQLSession(courseId, item.id, headers, aiConfig);
+            await processGraphQLSession(courseId, item.id, headers, aiConfig, courseContext);
         } else if (result?.errors) {
             log(`Start Attempt Failed: ${JSON.stringify(result.errors)}`);
         } else {
@@ -935,7 +957,7 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig) {
     }
 }
 
-async function processGraphQLSession(courseId, itemId, headers, aiConfig) {
+async function processGraphQLSession(courseId, itemId, headers, aiConfig, courseContext = null) {
     log("Attempting to fetch questions via GraphQL...");
     
     const graphqlUrl = 'https://www.coursera.org/graphql-gateway?opname=QueryState';
@@ -1887,7 +1909,7 @@ fragment TextBlock on Submission_TextBlock {
                 };
             }).filter(q => q !== null); // Filter out nulls (TextBlocks)
 
-            await solveQuestions('graphql', courseId, itemId, questions, headers, aiConfig);
+            await solveQuestions('graphql', courseId, itemId, questions, headers, aiConfig, courseContext);
 
         } else {
             log("No in-progress attempt found. You might need to start it manually once.");
@@ -1898,7 +1920,7 @@ fragment TextBlock on Submission_TextBlock {
     }
 }
 
-async function processSession(endpoint, sessionId, headers, aiConfig) {
+async function processSession(endpoint, sessionId, headers, aiConfig, courseContext = null) {
     // Generic function to handle session state and solving
     try {
         const actionUrl = `https://www.coursera.org/api/${endpoint}/${sessionId}/actions?includes=gradingAttempts`;
@@ -1924,7 +1946,6 @@ async function processSession(endpoint, sessionId, headers, aiConfig) {
         const actionData = await actionResp.json();
         
         // Extract questions from response
-        // Structure varies: elements[0].result.questions or questionStates
         let questions = null;
         if (actionData.elements && actionData.elements[0].result && actionData.elements[0].result.questions) {
             questions = actionData.elements[0].result.questions;
@@ -1934,7 +1955,7 @@ async function processSession(endpoint, sessionId, headers, aiConfig) {
 
         if (questions && questions.length > 0) {
             log(`Found ${questions.length} questions!`);
-            await solveQuestions(endpoint, sessionId, sessionId, questions, headers, aiConfig);
+            await solveQuestions(endpoint, sessionId, sessionId, questions, headers, aiConfig, courseContext);
         } else {
             log("No questions found in session state.");
             log("State Data: " + JSON.stringify(actionData).substring(0, 200));
@@ -1944,7 +1965,7 @@ async function processSession(endpoint, sessionId, headers, aiConfig) {
     }
 }
 
-async function solveQuestions(endpoint, courseId, itemId, questions, headers, aiConfig) {
+async function solveQuestions(endpoint, courseId, itemId, questions, headers, aiConfig, courseContext = null) {
     log(`Starting solver for ${questions.length} question(s)...`);
     
     const responsesToSave = [];
@@ -1965,31 +1986,38 @@ async function solveQuestions(endpoint, courseId, itemId, questions, headers, ai
             const isNumeric = (q.type === 'Submission_NumericQuestion' || q.type === 'Submission_SingleNumericQuestion' || q.type === 'Submission_MathQuestion');
             const isText = (q.type === 'Submission_PlainTextQuestion' || q.type === 'Submission_ShortAnswerQuestion' || q.type === 'Submission_TextExactMatchQuestion' || q.type === 'Submission_TextReflectQuestion');
 
+            const courseHeader = courseContext?.courseTitle 
+                ? `Course Context:\n- Course: ${courseContext.courseTitle}\n- Module: ${courseContext.moduleName || 'General'}\n- Assignment: ${courseContext.assignmentName || 'Quiz'}\n` 
+                : '';
+
             if (isText) {
-                prompt = `You are solving a Coursera quiz question.
+                prompt = `You are a top-performing student solving an assignment in a Coursera course.
 
+${courseHeader}
 Question:
 ${q.prompt?.text || "No question prompt available"}
 
 Instructions:
-Provide a direct, concise, and accurate answer to this question.
-Do not include any conversational preamble or explanation. Output only the answer itself.`;
+Provide a direct, concise, and accurate answer strictly based on the conventions, terminology, and tools taught in this specific course.
+Do not include any conversational preamble, quotes, or explanations. Output ONLY the answer itself.`;
             } else if (isNumeric) {
-                prompt = `You are solving a Coursera numerical calculation question.
+                prompt = `You are solving a numerical calculation question in a Coursera course.
 
+${courseHeader}
 Question:
 ${q.prompt?.text || "No question prompt available"}
 
 Instructions:
-Calculate the answer accurately.
+Calculate the answer accurately according to the methods taught in this course.
 Provide ONLY the final number (e.g. 42 or 3.14). Do not include words or units unless explicitly specified in the question.`;
             } else {
                 // MCQ / Checkbox
                 const optionsList = (q.options || []).map((o, index) => `Option ${index + 1} (${String.fromCharCode(65 + index)}): ${o.text}`).join('\n');
                 const multiNote = isCheckbox ? "Select all correct options." : "Select the single best correct option.";
 
-                prompt = `You are solving a Coursera multiple choice question.
+                prompt = `You are solving a multiple choice question in a Coursera course.
 
+${courseHeader}
 Question:
 ${q.prompt?.text || "No question prompt available"}
 
@@ -1998,6 +2026,7 @@ ${optionsList}
 
 Instructions:
 ${multiNote}
+Base your answer on the curriculum, definitions, and official conventions taught in this specific course.
 Reply ONLY with the correct option number(s) in this format: "Option 1" or "Option 1, Option 3".
 Do not output anything else.`;
             }

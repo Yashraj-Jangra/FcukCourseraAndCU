@@ -3,18 +3,21 @@
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:
+- 🎨 **Enhanced Console Log Viewer & Visual Feedback**:
+  - **Red Alert Highlighting (`.log-error`)**: Immediate soft red highlight + border on errors, failed requests, and network drops.
+  - **Emerald Green Highlighting (`.log-success`)**: Vibrant green styling for successful answers, submitted quizzes, posted discussions, and completed items.
+  - **Amber Warning Highlighting (`.log-warning`)**: Clear warning indicators for 429 quota cooling downs, model retries, and fallbacks.
+  - **Sky Blue AI Activity (`.log-ai`)**: Dedicated color-coding for AI prompt generation and response parsing.
+  - **Timestamps & Typography**: Clean `[HH:MM:SS]` timestamps and monospace font (`SF Mono`/`Fira Code`/`Consolas`).
+  - **Toolbar Controls**: Added one-click **Copy Logs** to clipboard and **Clear Logs** buttons.
 - 🎭 **Added Interactive Dialogue & Roleplay Auto-Completion (`completeDialogueItem`)**:
   - Automatically completes `dialogue`, `dialogueItem`, `interactiveDialogue`, and `roleplay` conversation simulation items.
-  - Interacts with `onDemandDialogueSessions.v1`, `onDemandDialogueCompletions.v1`, and GraphQL interactive schemas.
 - 💬 **Added AI-Powered Discussion Prompt Auto-Completion (`completeDiscussionPrompt`)**:
-  - Automatically fetches discussion prompt questions (`onDemandDiscussionPrompts.v1`).
-  - Generates insightful 2-3 sentence student responses via configured AI (Gemini / OpenRouter / Groq / Custom LLM) and submits them to `onDemandDiscussionPromptResponses.v1`.
+  - Automatically fetches discussion prompt questions and generates 2-3 sentence student responses via configured AI.
 - 🧪 **Added Practice Assignment & Lab Auto-Completion (`completePracticeLabOrLti`)**:
-  - Automatically resolves and completes `ungradedLti`, `gradedLti`, `ungradedLab`, `lab`, and `ungradedWidget` items via `onDemandLtiItemPasses.v1` and `onDemandLtiLaunches.v1`.
-- 🤖 **Added Interactive & Coach Item Completion (`completeGenericInteractiveItem`)**:
-  - Handles `coach`, `inCourseSurvey`, `survey`, and `singlePageApp` with auto-fallback.
+  - Automatically completes `ungradedLti`, `gradedLti`, `ungradedLab`, `lab`, and `ungradedWidget` items.
 - 🚀 **Added Multi-AI Provider Support (OpenRouter, Groq, Custom/Local LLMs, Gemini)**:
-  - Supports OpenRouter, Groq, Custom OpenAI-compatible endpoints (Ollama/DeepSeek), and Gemini.
+  - Supports OpenRouter (free models), Groq (high speed), Custom OpenAI-compatible endpoints (Ollama/DeepSeek), and Gemini.
 
 ### What's Planned Next / Future Considerations:
 - Test live across a broad variety of Coursera course formats (e.g. specialized peer-review assignments).

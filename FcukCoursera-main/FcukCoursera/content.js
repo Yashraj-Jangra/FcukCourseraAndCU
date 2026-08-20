@@ -1789,9 +1789,11 @@ Do not output anything else.`;
             log(`Error solving question ${q.id}: ${e.message}`);
         }
 
-        // Pacing delay between questions to stay safely under free-tier RPM limits
+        // Pacing delay between questions to stay safely under free-tier RPM limits (10 req/min)
+        // 7s between questions = max ~8 questions/min, well under the 10 RPM cap
         if (i < questions.length - 1 && !globalState.abortRequested) {
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            log(`Waiting 7s before next question to stay within API rate limits...`);
+            await new Promise(resolve => setTimeout(resolve, 7000));
         }
     }
 
@@ -2056,17 +2058,22 @@ async function processExamItem(userId, courseId, item, apiKey) {
 // Dynamic Gemini Model Discovery & Cache
 let cachedAvailableModels = null;
 
+// Keywords that indicate a specialty model that does NOT support standard text generateContent
+const EXCLUDED_MODEL_KEYWORDS = ['tts', 'image', 'vision', 'embedding', 'aqa', 'retrieval', 'semantic'];
+
+// Strict preference order for text generation models
+const PREFERRED_TEXT_MODELS = [
+    'gemini-2.5-flash-lite',   // Lowest quota pressure, good for free tier
+    'gemini-2.5-flash',        // Fast and capable
+    'gemini-2.5-pro',          // High quality fallback
+    'gemini-2.0-flash',        // Legacy fallback
+    'gemini-1.5-flash'         // Last resort
+];
+
 async function getAvailableGeminiModels(apiKey) {
     if (cachedAvailableModels && cachedAvailableModels.length > 0) {
         return cachedAvailableModels;
     }
-
-    const preferred = [
-        'gemini-2.5-flash',
-        'gemini-2.5-pro',
-        'gemini-2.0-flash',
-        'gemini-1.5-flash'
-    ];
 
     try {
         const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
@@ -2074,34 +2081,38 @@ async function getAvailableGeminiModels(apiKey) {
         if (resp.ok) {
             const data = await resp.json();
             if (data.models && Array.isArray(data.models)) {
-                // Filter for models supporting generateContent
-                const activeModelNames = data.models
+                const textModels = data.models
+                    // Must support generateContent
                     .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
-                    .map(m => m.name.replace('models/', ''));
+                    .map(m => m.name.replace('models/', ''))
+                    // Exclude specialty non-text models (TTS, image, embedding, etc.)
+                    .filter(name => !EXCLUDED_MODEL_KEYWORDS.some(kw => name.toLowerCase().includes(kw)));
 
-                if (activeModelNames.length > 0) {
-                    activeModelNames.sort((a, b) => {
-                        const aPref = preferred.findIndex(p => a === p || a.includes(p));
-                        const bPref = preferred.findIndex(p => b === p || b.includes(p));
+                if (textModels.length > 0) {
+                    // Sort by preference order
+                    textModels.sort((a, b) => {
+                        const aPref = PREFERRED_TEXT_MODELS.findIndex(p => a === p || a.startsWith(p));
+                        const bPref = PREFERRED_TEXT_MODELS.findIndex(p => b === p || b.startsWith(p));
                         if (aPref !== -1 && bPref !== -1) return aPref - bPref;
                         if (aPref !== -1) return -1;
                         if (bPref !== -1) return 1;
+                        // Prefer flash over pro for speed
                         if (a.includes('flash') && !b.includes('flash')) return -1;
                         if (!a.includes('flash') && b.includes('flash')) return 1;
                         return 0;
                     });
 
-                    log(`Discovered active Gemini models: ${activeModelNames.slice(0, 4).join(', ')}`);
-                    cachedAvailableModels = activeModelNames;
+                    log(`Using Gemini models: ${textModels.slice(0, 4).join(', ')}`);
+                    cachedAvailableModels = textModels;
                     return cachedAvailableModels;
                 }
             }
         }
     } catch (e) {
-        log(`Notice: Model auto-discovery fallback: ${e.message}`);
+        log(`Notice: Model discovery failed, using defaults: ${e.message}`);
     }
 
-    cachedAvailableModels = preferred;
+    cachedAvailableModels = PREFERRED_TEXT_MODELS;
     return cachedAvailableModels;
 }
 

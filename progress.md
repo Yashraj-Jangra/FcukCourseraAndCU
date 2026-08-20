@@ -3,6 +3,9 @@
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:
+- ⚡ **Dynamic High-Speed Pacing for Fast Providers**:
+  - Removed arbitrary 7s sleep delay for high-throughput providers (**Groq** runs at ~100ms, **OpenRouter** at ~300ms, and **Custom/Local LLMs** at ~200ms).
+  - Preserved a safe 4.5s cooldown only for **Google Gemini Free Tier** (to avoid 429 quota exhaustion).
 - 🛡️ **Added Anti-AI Disclosure Safeguards & Human Response Sanitization**:
   - Implemented `sanitizeHumanStudentResponse` to strip any robotic AI prefixes (`"As an AI..."`, `"As a language model..."`, `"Certainly! Here is..."`, `"Hope this helps!"`) and quotation marks.
   - Enforced strict prompt instructions commanding the model to act solely as a human student enrolled in the course, avoiding conversational preambles or AI disclosures.

@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "FcukCoursera",
+  "version": "1.0",
+  "description": "Automates marking all videos as complete in a Coursera course. Made by Sookeyy.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "cookies",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.coursera.org/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.jpg"
+  },
+  "icons": {
+    "16": "icon.jpg",
+    "48": "icon.jpg",
+    "128": "icon.jpg"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.coursera.org/*"],
+      "js": ["content.js"]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { background-color: black; width: 300px; padding: 15px; font-family: sans-serif; }
+    button { width: 100%; padding: 10px; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 5px; border-radius: 4px; }
+    
+    .btn-blue { background-color: #0056D2; }
+    .btn-blue:hover { background-color: #00419e; }
+    
+    .btn-green { background-color: #28a745; }
+    .btn-green:hover { background-color: #218838; }
+    
+    .btn-purple { background-color: #6f42c1; }
+    .btn-purple:hover { background-color: #5a32a3; }
+    
+    .btn-pink { background-color: #d63384; }
+    .btn-pink:hover { background-color: #c21b6c; }
+
+    .btn-red { background-color: #dc3545; }
+    .btn-red:hover { background-color: #bd2130; }
+
+    button:disabled { background-color: #444 !important; cursor: not-allowed; color: #888; }
+    
+    #status { margin-top: 10px; font-size: 12px; color: #9c9c9c; font-weight: 500; }
+    .log { max-height: 150px; overflow-y: auto; background: #1a1a1a; color: #e0e0e0; padding: 6px; margin-top: 10px; font-size: 10px; border: 1px solid #333; border-radius: 4px; line-height: 1.4; }
+    .log div { border-bottom: 1px solid #222; padding: 2px 0; }
+  </style>
+</head>
+<body>
+  <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 15px;">
+    <img src="icon.jpg" style="width: 40px; height: 40px; margin-right: 10px; border-radius: 50%;">
+    <h2 style="margin: 0; color: #0056D2;">FcukCoursera</h2>
+  </div>
+  
+  <p style="text-align: center; font-size: 12px; color: #aaa; margin-top: 0;">Navigate to a Course Home page and click Start.</p>
+  <button id="startBtn" class="btn-blue">Skip All Videos</button>
+  <button id="readBtn" class="btn-green">Skip All Readings</button>
+  <div style="margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;">
+    <input type="password" id="apiKey" placeholder="Gemini API Key" style="width: 100%; box-sizing: border-box; margin-bottom: 5px; padding: 6px; background: #222; color: #fff; border: 1px solid #444; border-radius: 4px;">
+    <button id="quizBtn" class="btn-purple">Solve Quizzes (Beta)</button>
+    <button id="completeBtn" class="btn-pink">Complete Course (Beta)</button>
+    <button id="stopBtn" class="btn-red" style="display: none;">Stop Process</button>
+  </div>
+  
+  <div id="progressContainer" style="margin-top: 10px; background-color: #333; border-radius: 4px; height: 10px; display: none;">
+    <div id="progressBar" style="background-color: #28a745; height: 100%; width: 0%; border-radius: 4px; transition: width 0.3s;"></div>
+  </div>
+  <div id="progressText" style="color: white; text-align: center; font-size: 10px; margin-top: 2px; display: none;">0%</div>
+
+  <div id="status">Ready</div>
+  <div id="log" class="log"></div>
+  <div style="text-align: center; margin-top: 10px; font-size: 10px; color: #888;">
+    Made by Sookeyy
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
+

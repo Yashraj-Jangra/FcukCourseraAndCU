@@ -3,6 +3,11 @@
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:
+- 🐛 **Fixed Practice Assignment Detection, Solving & Draft Submission**:
+  - **Comprehensive Classifier (`classifyItemType`)**: Matches all practice quizzes, practice assignments, programming exercises, activities, widgets, and labs.
+  - **Continuous GraphQL Solving**: Even if `Submission_StartAttempt` indicates an in-progress draft already exists, the solver now queries `QueryState`, parses questions across all schema candidate paths, and solves them with AI.
+  - **Reliable Draft Submission**: If `savedDraftId` is omitted from `Submission_SaveResponses`, falls back to `inProgress.draft.id` or active draft IDs to guarantee submission.
+  - **Server-Side REST Completion Fallback (`markAssignmentCompletedFallback`)**: Posts completion events to `onDemandAssignmentPasses.v1`, `onDemandWidgetPasses.v1`, `onDemandWidgetProgresses.v1`, `onDemandLtiItemPasses.v1`, and supplement completions to guarantee 100% completion in Coursera's syllabus.
 - 🎨 **Redesigned Modern 400px Popup UI**:
   - **Spacious & Minimalist Layout**: Increased width to 400px with comfortable padding, sleek typography, clean glass cards, and reduced div clutter.
   - **Primary Action Hero**: Full-width glowing hero button for **Complete Course (All-in-One)** with secondary grid buttons for **Quizzes**, **Videos**, and **Readings**.

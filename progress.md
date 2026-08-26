@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- ⚡ **Optimized LLM Execution & Non-Blocking Timeouts**:
+  - Reordered `PREFERRED_TEXT_MODELS` to place stable high-speed models (`gemini-2.0-flash`, `gemini-1.5-flash`) at the front of the cascade, eliminating 404 preview model discovery delays.
+  - Added strict `AbortSignal.timeout` (12s for Gemini, 15s for OpenAI/Custom) on all network requests to prevent unbounded hanging.
+  - Immediate fallback on 404/400 errors without wasted retry backoff sleep intervals.
 - 🐛 **Fixed GraphQL Schema Validation on Quiz Submission**:
   - Replaced invalid query fields `attemptCount`, `allowedAttempts`, and `completedAttempts` on `Submission_Attempts` with official schema fields `attemptsMade`, `attemptsAllowed`, and `outcome { earnedGrade isPassed }` on `SubmissionState` across `Submission_StartAttempt` and `Submission_SubmitLatestDraft` mutations, completely eliminating HTTP 400 `GRAPHQL_VALIDATION_FAILED` errors on quiz and graded assignment submissions.
 - 🎯 **Live On-Screen DOM Quiz & Graded Assignment Solver (`solveQuizOnScreenInDOM`)**:

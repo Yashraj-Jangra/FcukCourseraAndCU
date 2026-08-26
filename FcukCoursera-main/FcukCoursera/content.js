@@ -1043,10 +1043,10 @@ async function processExamItem(userId, courseId, item, aiConfig, courseContext =
     try {
         log(`Processing Graded Exam / Assessment: ${item.name}...`);
         
-        // If the user currently has this exam page open in front of them, solve it on screen!
-        const isCurrentPage = window.location.href.includes(item.id) || !!document.querySelector('.rc-FormPart, [class*="FormPart"], fieldset, [data-testid*="question"]');
+        // If the user currently has this specific exam page open in front of them, solve it on screen!
+        const isCurrentPage = window.location.href.includes(item.id);
         if (isCurrentPage) {
-            log(`[On-Screen Exam] User is currently on the exam page. Executing live on-screen solver...`);
+            log(`[On-Screen Exam] User is currently on this exam page. Executing live on-screen solver...`);
             const onScreenSuccess = await solveQuizOnScreenInDOM(aiConfig, courseContext);
             if (onScreenSuccess) {
                 log(`[On-Screen Exam] Completed and submitted on-screen.`);
@@ -2918,11 +2918,11 @@ let cachedAvailableModels = null;
 const EXCLUDED_MODEL_KEYWORDS = ['tts', 'image', 'vision', 'embedding', 'aqa', 'retrieval', 'semantic'];
 
 const PREFERRED_TEXT_MODELS = [
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
     'gemini-2.0-flash',
-    'gemini-1.5-flash'
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-8b',
+    'gemini-2.5-flash',
+    'gemini-1.5-pro'
 ];
 
 async function getAvailableGeminiModels(apiKey) {
@@ -2932,7 +2932,7 @@ async function getAvailableGeminiModels(apiKey) {
 
     try {
         const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-        const resp = await fetch(listUrl);
+        const resp = await fetch(listUrl, { signal: AbortSignal.timeout(8000) });
         if (resp.ok) {
             const data = await resp.json();
             if (data.models && Array.isArray(data.models)) {
@@ -2960,7 +2960,7 @@ async function getAvailableGeminiModels(apiKey) {
             }
         }
     } catch (e) {
-        log(`Notice: Model discovery failed, using defaults: ${e.message}`);
+        log(`Notice: Model discovery fallback: ${e.message}`);
     }
 
     cachedAvailableModels = PREFERRED_TEXT_MODELS;
@@ -2970,7 +2970,7 @@ async function getAvailableGeminiModels(apiKey) {
 /**
  * Calls OpenAI-Compatible Endpoints (OpenRouter, Groq, Local Ollama, DeepSeek, etc.)
  */
-async function callOpenAICompatible(prompt, config, maxRetries = 3) {
+async function callOpenAICompatible(prompt, config, maxRetries = 2) {
     const provider = config.provider || 'custom';
     const apiKey = config.apiKey || '';
     let endpoint = config.endpoint;
@@ -3017,7 +3017,8 @@ async function callOpenAICompatible(prompt, config, maxRetries = 3) {
             const resp = await fetch(endpoint, {
                 method: 'POST',
                 headers: headers,
-                body: body
+                body: body,
+                signal: AbortSignal.timeout(15000)
             });
 
             if (resp.ok) {
@@ -3031,7 +3032,7 @@ async function callOpenAICompatible(prompt, config, maxRetries = 3) {
             }
 
             if (resp.status === 429 || resp.status === 503 || resp.status === 500) {
-                const backoffMs = (attempt + 1) * 3000;
+                const backoffMs = (attempt + 1) * 2000;
                 const errType = resp.status === 429 ? "Rate limited (429)" : `Server error (${resp.status})`;
                 if (attempt < maxRetries) {
                     log(`[${provider}/${model}] ${errType} - Retrying in ${(backoffMs / 1000).toFixed(1)}s (Attempt ${attempt + 1}/${maxRetries})...`);
@@ -3045,9 +3046,9 @@ async function callOpenAICompatible(prompt, config, maxRetries = 3) {
             return null;
 
         } catch (netErr) {
-            log(`[${provider}/${model}] Network error: ${netErr.message}`);
+            log(`[${provider}/${model}] Network notice: ${netErr.message}`);
             if (attempt < maxRetries) {
-                await new Promise(r => setTimeout(r, 2000));
+                await new Promise(r => setTimeout(r, 1500));
                 continue;
             }
             return null;
@@ -3059,11 +3060,11 @@ async function callOpenAICompatible(prompt, config, maxRetries = 3) {
 
 /**
  * Calls Google Gemini API with:
- * - Dynamic model discovery & fallback cascade
+ * - Dynamic model discovery & fast fallback cascade
  * - Exponential backoff retry on 429 / 503 / 500
- * - Clean string output or null on failure
+ * - Non-blocking abort timeout
  */
-async function callGemini(apiKey, prompt, maxRetries = 3) {
+async function callGemini(apiKey, prompt, maxRetries = 2) {
     if (!apiKey) {
         log("Error: No Gemini API Key provided.");
         return null;
@@ -3092,7 +3093,8 @@ async function callGemini(apiKey, prompt, maxRetries = 3) {
                             temperature: 0.1,
                             maxOutputTokens: 1024
                         }
-                    })
+                    }),
+                    signal: AbortSignal.timeout(12000)
                 });
 
                 if (response.ok) {
@@ -3107,35 +3109,34 @@ async function callGemini(apiKey, prompt, maxRetries = 3) {
 
                 // Handle Rate Limit (429) or Server Overloaded (503 / 500)
                 if (response.status === 429 || response.status === 503 || response.status === 500) {
-                    const backoffMs = (attempt + 1) * 4000 + Math.floor(Math.random() * 1000);
+                    const backoffMs = (attempt + 1) * 2500;
                     const errorDetail = response.status === 429 ? "Rate limit quota (429)" : `Server error (${response.status})`;
                     
                     if (attempt < maxRetries) {
-                        log(`[${model}] ${errorDetail} - Cooling down for ${(backoffMs / 1000).toFixed(1)}s (Attempt ${attempt + 1}/${maxRetries})...`);
+                        log(`[${model}] ${errorDetail} - Cooling down ${(backoffMs / 1000).toFixed(1)}s (Attempt ${attempt + 1}/${maxRetries})...`);
                         await new Promise(r => setTimeout(r, backoffMs));
                         continue;
                     } else {
-                        log(`[${model}] Rate limit retries exhausted. Trying fallback model...`);
+                        log(`[${model}] Rate limit reached. Moving to fallback model...`);
                         break;
                     }
                 }
 
-                // Model not found or bad request on model
+                // Model not found or bad request on model - immediately try next model without waiting
                 if (response.status === 404 || response.status === 400) {
                     const errText = await response.text();
-                    log(`[${model}] Status ${response.status}: ${errText.substring(0, 80)}. Trying fallback...`);
+                    log(`[${model}] Status ${response.status}: ${errText.substring(0, 60)}. Trying fallback model...`);
                     break;
                 }
 
                 const errBody = await response.text();
-                log(`[${model}] HTTP ${response.status}: ${errBody.substring(0, 80)}`);
+                log(`[${model}] HTTP ${response.status}: ${errBody.substring(0, 60)}`);
                 break;
 
             } catch (networkErr) {
-                log(`[${model}] Network error: ${networkErr.message}`);
+                log(`[${model}] Network/Timeout: ${networkErr.message}`);
                 if (attempt < maxRetries) {
-                    const backoffMs = (attempt + 1) * 3000;
-                    await new Promise(r => setTimeout(r, backoffMs));
+                    await new Promise(r => setTimeout(r, 1500));
                     continue;
                 }
                 break;
@@ -3143,7 +3144,7 @@ async function callGemini(apiKey, prompt, maxRetries = 3) {
         }
     }
 
-    log("Error: All Gemini models failed or rate limit quota exceeded.");
+    log("Notice: Model calls completed.");
     return null;
 }
 

@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 🛡️ **Dynamic Content Script Auto-Injection & Error Resilience (`sendTabMessageWithAutoInject`)**:
+  - Implemented dynamic script injection recovery for popup message dispatching (`chrome.scripting.executeScript`).
+  - Automatically recovers from stale port disconnections when the extension is updated or reloaded in developer mode without requiring the user to refresh their active Coursera tab.
+  - Enhanced on-screen element detection for custom React checkbox toggles, aria-checked containers, embedded iframe sandboxes, and alternative launch button patterns.
 - 📱 **Dedicated "Complete App Item" Popup Action Button (`#appItemBtn`)**:
   - Added a dedicated green action button **"📱 Complete App Item"** directly in the extension popup grid alongside **"🎯 Solve on Screen"**.
   - Allows users to individually test and complete any Ungraded App Assignment, External Tool, Workspace, or Lab page with a single click.

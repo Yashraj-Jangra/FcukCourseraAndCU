@@ -328,14 +328,45 @@ copyReportBtn.addEventListener('click', () => {
     });
 });
 
+// Robust Tab Message Dispatcher with Auto-Injection Fallback
+async function sendTabMessageWithAutoInject(tabId, message, onComplete) {
+    chrome.tabs.sendMessage(tabId, message, async (response) => {
+        if (chrome.runtime.lastError) {
+            console.log("Content script port disconnected. Auto-injecting content.js...", chrome.runtime.lastError.message);
+            try {
+                await chrome.scripting.executeScript({
+                    target: { tabId: tabId },
+                    files: ['content.js']
+                });
+                // Wait briefly for content script initialization, then retry message
+                setTimeout(() => {
+                    chrome.tabs.sendMessage(tabId, message, (retryResp) => {
+                        if (chrome.runtime.lastError) {
+                            console.warn("Message retry failed:", chrome.runtime.lastError.message);
+                            if (onComplete) onComplete(null, chrome.runtime.lastError);
+                        } else {
+                            if (onComplete) onComplete(retryResp, null);
+                        }
+                    });
+                }, 350);
+            } catch (injectErr) {
+                console.error("Auto-injection failed:", injectErr);
+                if (onComplete) onComplete(null, injectErr);
+            }
+        } else {
+            if (onComplete) onComplete(response, null);
+        }
+    });
+}
+
 // Stop Button
 document.getElementById('stopBtn').addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) return;
 
     document.getElementById('status').innerText = "Stopping...";
-    chrome.tabs.sendMessage(tab.id, { action: "stop_process" }, (response) => {
-        if (chrome.runtime.lastError) {
+    sendTabMessageWithAutoInject(tab.id, { action: "stop_process" }, (response, err) => {
+        if (err) {
             document.getElementById('status').innerText = "Could not reach tab.";
         }
     });
@@ -352,8 +383,8 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     setRunningUIState(true);
     document.getElementById('status').innerText = "Skipping Videos...";
 
-    chrome.tabs.sendMessage(tab.id, { action: "start_skipping" }, (response) => {
-        if (chrome.runtime.lastError) {
+    sendTabMessageWithAutoInject(tab.id, { action: "start_skipping" }, (response, err) => {
+        if (err) {
             setRunningUIState(false);
             document.getElementById('status').innerText = "Error: Refresh page & try again.";
         }
@@ -371,8 +402,8 @@ document.getElementById('appItemBtn').addEventListener('click', async () => {
     setRunningUIState(true);
     document.getElementById('status').innerText = "Solving App / Tool Item on screen...";
 
-    chrome.tabs.sendMessage(tab.id, { action: "complete_app_item_on_screen" }, (response) => {
-        if (chrome.runtime.lastError) {
+    sendTabMessageWithAutoInject(tab.id, { action: "complete_app_item_on_screen" }, (response, err) => {
+        if (err) {
             setRunningUIState(false);
             document.getElementById('status').innerText = "Error: Refresh page & try again.";
         }
@@ -390,8 +421,8 @@ document.getElementById('readBtn').addEventListener('click', async () => {
     setRunningUIState(true);
     document.getElementById('status').innerText = "Completing Readings...";
 
-    chrome.tabs.sendMessage(tab.id, { action: "start_reading_completion" }, (response) => {
-        if (chrome.runtime.lastError) {
+    sendTabMessageWithAutoInject(tab.id, { action: "start_reading_completion" }, (response, err) => {
+        if (err) {
             setRunningUIState(false);
             document.getElementById('status').innerText = "Error: Refresh page & try again.";
         }
@@ -402,8 +433,8 @@ document.getElementById('readBtn').addEventListener('click', async () => {
 (async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.url && tab.url.includes("coursera.org")) {
-        chrome.tabs.sendMessage(tab.id, { action: "get_status" }, (response) => {
-            if (chrome.runtime.lastError || !response) return;
+        sendTabMessageWithAutoInject(tab.id, { action: "get_status" }, (response) => {
+            if (!response) return;
             
             if (response.statusMessage && response.statusMessage !== "Ready") {
                 document.getElementById('status').innerText = response.statusMessage;
@@ -478,13 +509,13 @@ async function executeOnScreenSolver(autoSubmit) {
         ? "Solving & Auto-Submitting Quiz..." 
         : "Solving & Saving Quiz as Draft...";
 
-    chrome.tabs.sendMessage(tab.id, { 
+    sendTabMessageWithAutoInject(tab.id, { 
         action: "start_onscreen_quiz_solver", 
         apiKey: config.apiKey, 
         aiConfig: config,
         autoSubmit: autoSubmit
-    }, (response) => {
-        if (chrome.runtime.lastError) {
+    }, (response, err) => {
+        if (err) {
             setRunningUIState(false);
             document.getElementById('status').innerText = "Error: Refresh page & try again.";
         }
@@ -516,12 +547,12 @@ document.getElementById('quizBtn').addEventListener('click', async () => {
     setRunningUIState(true);
     document.getElementById('status').innerText = "Solving Quizzes & Practice...";
 
-    chrome.tabs.sendMessage(tab.id, { 
+    sendTabMessageWithAutoInject(tab.id, { 
         action: "start_quiz_solver", 
         apiKey: config.apiKey, 
         aiConfig: config 
-    }, (response) => {
-        if (chrome.runtime.lastError) {
+    }, (response, err) => {
+        if (err) {
             setRunningUIState(false);
             document.getElementById('status').innerText = "Error: Refresh page & try again.";
         }
@@ -547,12 +578,12 @@ document.getElementById('completeBtn').addEventListener('click', async () => {
     setRunningUIState(true);
     document.getElementById('status').innerText = "Running Complete Course with T&C & Auto-Submit...";
 
-    chrome.tabs.sendMessage(tab.id, { 
+    sendTabMessageWithAutoInject(tab.id, { 
         action: "start_complete_course", 
         apiKey: config.apiKey, 
         aiConfig: config 
-    }, (response) => {
-        if (chrome.runtime.lastError) {
+    }, (response, err) => {
+        if (err) {
             setRunningUIState(false);
             document.getElementById('status').innerText = "Error: Refresh page & try again.";
         }

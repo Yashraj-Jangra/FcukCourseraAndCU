@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 🔍 **Multi-Layer Progress Pre-Fetcher & Universal DOM Scanner Upgrade (`fetchCourseProgressState`)**:
+  - Expanded API endpoints to include `onDemandLtiItemPasses.v1`, `onDemandAppCompletions.v1`, `onDemandLearnerItemProgresses.v1`, and `onDemandSupplementCompletions.v1`.
+  - Added in-memory Apollo/Redux cache traversal (`window.__APOLLO_STATE__`, `window.__INITIAL_STATE__`) to retrieve cached completion status.
+  - Implemented universal DOM scanner supporting all link patterns (`/ungradedLti/`, `/gradedLti/`, `/item/`, `/lecture/`, `/supplement/`) and CDS badge icons (`SuccessOutline`, `CheckCircle`, `CheckmarkFilled`) for 100% accurate identification of completed vs. pending items.
 - ⚡ **Strict Uncompleted App Item Filtering & Accelerated Navigation Engine**:
   - Filtered out all completed/passed items upfront, completely eliminating redundant re-attempts on already completed apps.
   - Added on-screen completion badge verification (`item-status-completed`, `Passed`) to skip completed pages immediately without waiting.

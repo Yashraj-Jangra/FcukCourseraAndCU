@@ -358,17 +358,29 @@ async function fetchCourseProgressState(userId, courseId, courseSlug = null, syl
         }
     } catch(e) {}
 
-    // 2. Fetch onDemandCourseProgresses (Try both ID orders + query params)
-    const courseProgressUrls = [
+    // 2. Query all Coursera Progress and LTI/App Completion Endpoints
+    const progressEndpoints = [
         `https://www.coursera.org/api/onDemandCourseProgresses.v1/${courseId}~${userId}?includes=completedItemIds,itemProgresses`,
         `https://www.coursera.org/api/onDemandCourseProgresses.v1/${userId}~${courseId}?includes=completedItemIds,itemProgresses`,
         `https://www.coursera.org/api/onDemandCourseProgresses.v1?q=course&courseId=${courseId}`,
-        `https://www.coursera.org/api/onDemandCourseProgresses.v1?q=user&userId=${userId}`
+        `https://www.coursera.org/api/onDemandCourseProgresses.v1?q=user&userId=${userId}`,
+        `https://www.coursera.org/api/onDemandItemProgresses.v1?q=course&courseId=${courseId}`,
+        `https://www.coursera.org/api/onDemandItemProgresses.v1?q=courseAndUser&courseId=${courseId}&userId=${userId}`,
+        `https://www.coursera.org/api/onDemandLearnerItemProgresses.v1?q=course&courseId=${courseId}`,
+        `https://www.coursera.org/api/onDemandLearnerItemProgresses.v1?q=courseAndUser&courseId=${courseId}&userId=${userId}`,
+        `https://www.coursera.org/api/onDemandLtiItemPasses.v1?q=course&courseId=${courseId}`,
+        `https://www.coursera.org/api/onDemandLtiItemPasses.v1?q=user&userId=${userId}`,
+        `https://www.coursera.org/api/onDemandAppCompletions.v1?q=course&courseId=${courseId}`,
+        `https://www.coursera.org/api/onDemandAppCompletions.v1?q=user&userId=${userId}`,
+        `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=course&courseId=${courseId}`,
+        `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=user&userId=${userId}`,
+        `https://www.coursera.org/api/onDemandSupplementCompletions.v1?q=course&courseId=${courseId}&userId=${userId}`,
+        `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}&userId=${userId}`
     ];
 
-    for (const url of courseProgressUrls) {
+    for (const url of progressEndpoints) {
         try {
-            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(5000) });
+            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(4000) });
             if (resp.ok) {
                 const data = await resp.json();
                 const elements = data.elements || [];
@@ -381,90 +393,47 @@ async function fetchCourseProgressState(userId, courseId, courseSlug = null, syl
                             }
                         });
                     }
+                    if (el.isCompleted || el.isPassed || el.progressState === 'COMPLETED' || el.progressState === 'PASSED' || el.status === 'PASSED' || el.status === 'COMPLETED' || (el.fractionalScore && el.fractionalScore >= 0.7)) {
+                        addCompleted(el.itemId || el.id);
+                        if (el.fractionalScore !== undefined) {
+                            addPassedQuiz(el.itemId || el.id, Math.round(el.fractionalScore * 100));
+                        }
+                    }
                 }
-                if (progressData.completedItemIds.size > 0) break;
             }
         } catch(e) {}
     }
 
-    // 3. Fetch onDemandItemProgresses
-    const itemProgressUrls = [
-        `https://www.coursera.org/api/onDemandItemProgresses.v1?q=course&courseId=${courseId}`,
-        `https://www.coursera.org/api/onDemandItemProgresses.v1?q=courseAndUser&courseId=${courseId}&userId=${userId}`
-    ];
-
-    for (const url of itemProgressUrls) {
-        try {
-            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(5000) });
-            if (resp.ok) {
-                const data = await resp.json();
-                (data.elements || []).forEach(ip => {
-                    if (ip.isCompleted || ip.progressState === 'COMPLETED' || ip.progressState === 'PASSED') {
-                        addCompleted(ip.itemId || ip.id);
-                    }
-                });
-            }
-        } catch(e) {}
-    }
-
-    // 4. Fetch onDemandAssignmentPasses (Quiz & Assessment Scores)
-    const passesUrls = [
-        `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=course&courseId=${courseId}`,
-        `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=user&userId=${userId}`,
-        `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=courseAndUser&courseId=${courseId}&userId=${userId}`
-    ];
-
-    for (const url of passesUrls) {
-        try {
-            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(5000) });
-            if (resp.ok) {
-                const data = await resp.json();
-                (data.elements || []).forEach(p => {
-                    if (p.isPassed || p.status === 'PASSED' || p.status === 'COMPLETED' || (p.fractionalScore && p.fractionalScore >= 0.7)) {
-                        addPassedQuiz(p.itemId, Math.round((p.fractionalScore || 1) * 100));
-                    }
-                });
-            }
-        } catch(e) {}
-    }
-
-    // 5. Fetch onDemandItemViews
-    const viewsUrls = [
-        `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}&userId=${userId}`,
-        `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}`,
-        `https://www.coursera.org/api/onDemandItemViews.v1/?q=user&userId=${userId}`
-    ];
-
-    for (const url of viewsUrls) {
-        try {
-            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(5000) });
-            if (resp.ok) {
-                const data = await resp.json();
-                (data.elements || []).forEach(v => {
-                    if (v.completed || v.isCompleted || v.progressState === 'COMPLETED') {
-                        addCompleted(v.itemId);
-                    }
-                });
-            }
-        } catch(e) {}
-    }
-
-    // 6. DOM Screen Check: Scan for visible completed checkmarks on the active Coursera webpage
+    // 3. Inspect Apollo / Redux State Cache in Memory
     try {
-        const itemLinks = Array.from(document.querySelectorAll('a[href*="/item/"]'));
-        for (const link of itemLinks) {
+        const apolloState = window.__APOLLO_STATE__ || window.__INITIAL_STATE__;
+        if (apolloState && typeof apolloState === 'object') {
+            for (const [key, val] of Object.entries(apolloState)) {
+                if (val && typeof val === 'object') {
+                    if (val.isCompleted === true || val.progressState === 'COMPLETED' || val.progressState === 'PASSED' || val.isPassed === true) {
+                        const itId = val.itemId || val.id;
+                        if (itId) addCompleted(itId);
+                    }
+                }
+            }
+        }
+    } catch(e) {}
+
+    // 4. Universal DOM Scanner: Detect all completed checkmarks and badges across current webpage
+    try {
+        const allCourseLinks = Array.from(document.querySelectorAll('a[href*="/learn/"], a[href*="/item/"], a[href*="/ungradedLti/"], a[href*="/gradedLti/"], a[href*="/ungradedApp/"], a[href*="/gradedApp/"], a[href*="/lecture/"], a[href*="/supplement/"], a[href*="/quiz/"], a[href*="/exam/"]'));
+        for (const link of allCourseLinks) {
             const href = link.getAttribute('href') || '';
-            const match = href.match(/\/item\/([a-zA-Z0-9_-]+)/);
-            if (!match) continue;
-            const itemId = match[1];
+            const { itemId } = extractCourseAndItemIdFromURL(href);
+            if (!itemId) continue;
 
-            // Check if link or its parent container has completed indicators
-            const row = link.closest('li, [class*="ItemRow"], [class*="item-row"], [class*="ItemCard"], [class*="card"], div[role="listitem"]') || link;
-            const hasCompletedIcon = !!row.querySelector('svg[aria-label*="Completed"], svg[aria-label*="Passed"], svg[data-testid*="completed"], [class*="completed"], [class*="CompletedIcon"], [class*="success"]');
+            const row = link.closest('li, [class*="ItemRow"], [class*="item-row"], [class*="ItemCard"], [class*="card"], [class*="ItemContainer"], [role="listitem"], div[class*="cds-"]') || link;
+            
+            const hasCompletedIcon = !!row.querySelector('[data-testid*="completed"], [data-testid*="Completed"], [data-testid*="SuccessOutline"], [data-testid*="CheckCircle"], [data-testid*="Checkmark"], svg[aria-label*="Completed"], svg[aria-label*="Passed"], [class*="completed"], [class*="CompletedIcon"]');
             const rowText = (row.innerText || row.textContent || '').toLowerCase();
-            const isCompletedText = rowText.includes('completed') || rowText.includes('passed') || rowText.includes('graded: 100%') || rowText.includes('graded: 80%');
+            const isCompletedText = (rowText.includes('completed') || rowText.includes('passed') || rowText.includes('100%') || rowText.includes('80%')) && !rowText.includes('not completed');
 
-            if (hasCompletedIcon || (isCompletedText && !rowText.includes('not completed'))) {
+            if (hasCompletedIcon || isCompletedText) {
                 addCompleted(itemId);
             }
         }
@@ -1527,6 +1496,10 @@ async function startCompleteAllAppItemsProcess() {
         const appItems = allItems.filter(item => isAppOrToolItem(item));
 
         log(`Found ${appItems.length} total App / Lab / Tool items in course "${courseTitle}".`);
+        appItems.forEach(it => {
+            const isDone = progressData.completedItemIds.has(it.id);
+            log(`  [${isDone ? '✓ Done' : '⏳ Pending'}] ${it.name} (${it.typeName || 'app'}, ID: ${it.id})`);
+        });
 
         if (appItems.length === 0) {
             // Fallback: Check if active page is an app item
@@ -1560,7 +1533,7 @@ async function startCompleteAllAppItemsProcess() {
         }
 
         const itemsToProcess = uncompletedApps;
-        log(`Queued ${itemsToProcess.length} uncompleted App item(s) (Skipped ${appItems.length - itemsToProcess.length} already completed items).`);
+        log(`Queued ${itemsToProcess.length} uncompleted App item(s) for live completion.`);
 
         // Store persistent queue in chrome.storage.local
         const queueData = {

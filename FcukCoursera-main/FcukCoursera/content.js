@@ -374,8 +374,7 @@ async function fetchCourseProgressState(userId, courseId, courseSlug = null, syl
         `https://www.coursera.org/api/onDemandAppCompletions.v1?q=user&userId=${userId}`,
         `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=course&courseId=${courseId}`,
         `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=user&userId=${userId}`,
-        `https://www.coursera.org/api/onDemandSupplementCompletions.v1?q=course&courseId=${courseId}&userId=${userId}`,
-        `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}&userId=${userId}`
+        `https://www.coursera.org/api/onDemandSupplementCompletions.v1?q=course&courseId=${courseId}&userId=${userId}`
     ];
 
     for (const url of progressEndpoints) {
@@ -1094,11 +1093,85 @@ Strict Safety & Style Guidelines:
 }
 
 /**
+ * Synthetic Click Dispatcher: Dispatches full pointer/mouse/touch event sequence to trigger native and framework event listeners.
+ */
+function clickNativeElement(element) {
+    if (!element) return;
+    try {
+        if (typeof element.scrollIntoView === 'function') {
+            element.scrollIntoView({ behavior: 'auto', block: 'center' });
+        }
+        if (typeof element.focus === 'function') {
+            element.focus();
+        }
+
+        const events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+        for (const evtType of events) {
+            const evt = new MouseEvent(evtType, {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                view: window,
+                detail: 1
+            });
+            element.dispatchEvent(evt);
+        }
+        if (typeof element.click === 'function') {
+            element.click();
+        }
+    } catch(e) {
+        try { element.click(); } catch(err) {}
+    }
+}
+
+/**
+ * Native React & DOM Checkbox Setter: Sets input.checked and notifies React 16/17/18 state machines.
+ */
+function setNativeCheckbox(input, targetChecked = true) {
+    if (!input) return;
+    try {
+        const isCurrentlyChecked = !!input.checked;
+
+        // 1. Bypass React's internal state tracker using prototype descriptor
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
+        if (nativeSetter) {
+            nativeSetter.call(input, targetChecked);
+        } else {
+            input.checked = targetChecked;
+        }
+
+        // 2. Dispatch change & input events for React Aria and CDS listeners
+        input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+
+        // 3. If turning on from false, click the label or container as well
+        if (!isCurrentlyChecked && targetChecked) {
+            const parentLabel = input.closest('label') || document.querySelector(`label[for="${input.id}"]`);
+            if (parentLabel) {
+                clickNativeElement(parentLabel);
+            } else {
+                clickNativeElement(input);
+            }
+        }
+
+        // 4. Update aria attributes
+        input.setAttribute('aria-checked', targetChecked ? 'true' : 'false');
+        input.setAttribute('data-indeterminate', 'false');
+        input.removeAttribute('aria-invalid');
+    } catch(e) {
+        try {
+            input.checked = targetChecked;
+            input.click();
+        } catch(err) {}
+    }
+}
+
+/**
  * Live On-Screen Ungraded App / LTI / Tool Solver:
  * 1. Checks all "I agree to use this app responsibly", Terms, and Consent checkboxes on the active page
  * 2. Finds and clicks "Launch App" / "Open Tool" / "Open Workspace" / "Go to App" button or link
  * 3. Triggers window.open for external tool URL in new browser tab
- * 4. Displays live status HUD and waits 5s for Coursera session tokens to register
+ * 4. Displays live status HUD and waits 2s for Coursera session tokens to register
  * 5. Clicks "Mark as completed" / "Done" / "Submit" button if present
  * 6. Dispatches full API completion cascade
  */
@@ -1408,33 +1481,6 @@ async function processCurrentAppQueueStep() {
             return;
         }
 
-        // Check if active page is already marked completed or passed on screen
-        const completedBadge = document.querySelector('[data-testid="item-status-completed"], .cds-badge, [aria-label*="Completed"], [aria-label*="Passed"], [class*="completed"], [class*="Passed"]');
-        if (completedBadge) {
-            const badgeText = (completedBadge.innerText || completedBadge.getAttribute('aria-label') || '').toLowerCase();
-            if (badgeText.includes('completed') || badgeText.includes('passed') || badgeText.includes('100%')) {
-                log(`[App Navigator] Item "${item.name}" is already marked completed/passed on screen! Skipping.`);
-                showOnScreenHUD(`✓ Already Completed: ${item.name.substring(0, 25)}`, "info");
-                
-                const nextIndex = currentIndex + 1;
-                await chrome.storage.local.set({ appQueueIndex: nextIndex });
-                
-                if (nextIndex < total) {
-                    const nextItem = data.activeAppQueue[nextIndex];
-                    await new Promise(r => setTimeout(r, 200));
-                    window.location.href = nextItem.url;
-                } else {
-                    log(`\n🎉 [App Navigator] Successfully completed all ${total} App / Lab items!`);
-                    updateStatus(`All ${total} App items completed!`);
-                    showOnScreenHUD(`🎉 All ${total} App / Lab Items Completed!`, "success");
-                    await chrome.storage.local.remove(['activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId']);
-                    setTimeout(hideOnScreenHUD, 3500);
-                    chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
-                }
-                return;
-            }
-        }
-
         // We ARE on this item's page! Run on-screen DOM solver!
         showOnScreenHUD(`📱 Solving On-Screen (${currentIndex + 1}/${total}): ${item.name.substring(0, 30)}...`, "working");
         updateStatus(`Solving App (${currentIndex + 1}/${total}): ${item.name}...`);
@@ -1522,8 +1568,21 @@ async function startCompleteAllAppItemsProcess() {
         }
 
         // Filter strictly for uncompleted items
-        const uncompletedApps = appItems.filter(item => !progressData.completedItemIds.has(item.id));
+        let uncompletedApps = appItems.filter(item => !progressData.completedItemIds.has(item.id));
         
+        // If currently on an active App/Lab page and user clicked the button, guarantee active item is included
+        const { itemId: currentUrlItemId } = extractCourseAndItemIdFromURL(window.location.href);
+        if (currentUrlItemId) {
+            const activeItem = appItems.find(it => it.id === currentUrlItemId) || {
+                id: currentUrlItemId,
+                name: document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : "Current App Item",
+                typeName: window.location.href.includes('gradedLti') ? 'gradedLti' : 'ungradedLti'
+            };
+            if (!uncompletedApps.some(it => it.id === currentUrlItemId)) {
+                uncompletedApps.unshift(activeItem);
+            }
+        }
+
         if (uncompletedApps.length === 0) {
             log(`[App Solver] All ${appItems.length} App / Lab items in "${courseTitle}" are already completed! Zero items need solving.`);
             updateStatus("All App items already completed!");

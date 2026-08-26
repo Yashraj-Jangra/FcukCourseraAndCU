@@ -400,7 +400,7 @@ document.getElementById('appItemBtn').addEventListener('click', async () => {
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Solving App / Tool Item on screen...";
+    document.getElementById('status').innerText = "Completing App Items in Course...";
 
     sendTabMessageWithAutoInject(tab.id, { action: "complete_app_item_on_screen" }, (response, err) => {
         if (err) {

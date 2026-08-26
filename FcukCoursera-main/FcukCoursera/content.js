@@ -174,53 +174,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         globalState.isRunning = true;
         globalState.abortRequested = false;
         globalState.currentAction = "app_item";
-        updateStatus("Solving App / Tool Item on screen...");
+        updateStatus("Completing all App & Lab items in course...");
 
-        (async () => {
-            try {
-                showOnScreenHUD("FcukCoursera: Processing App / Tool...", "working");
-                log("[App / Tool Solver] Starting dedicated on-screen App item completion...");
-
-                // 1. Live DOM solver (React Aria agree checkbox + launch button + form submit + tokens wait + mark complete)
-                const domSuccess = await completeUngradedAppItemInDOM();
-
-                // 2. Resolve course/user/item IDs from page URL and syllabus to trigger background API passes
-                try {
-                    const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
-                    const { courseSlug, itemId } = extractCourseAndItemIdFromURL(window.location.href);
-
-                    log(`[App / Tool Solver] Resolved Course: "${courseSlug}", Item ID: "${itemId}"`);
-
-                    const { userId, courseId } = await getCourseData();
-                    if (userId && courseId && itemId) {
-                        const mockItem = { id: itemId, name: cleanTitle || "Hands-on Lab", typeName: "ungradedLti" };
-                        log(`[App / Tool Solver] Dispatching multi-schema background API completion passes for item ${itemId}...`);
-                        await completeUngradedAppItem(userId, courseId, courseSlug, mockItem);
-                    }
-                } catch(apiErr) {
-                    log(`Notice in API pass: ${apiErr.message}`);
-                }
-
-                if (domSuccess) {
-                    log("[App / Tool Solver] App / Tool item successfully launched and completed!");
-                    updateStatus("App Item Completed Successfully!");
-                    showOnScreenHUD("🎉 App Item Completed Successfully!", "success");
-                    setTimeout(hideOnScreenHUD, 4500);
-                } else {
-                    log("[App / Tool Solver] Finished processing App item.");
-                    updateStatus("App Item Processed.");
-                    showOnScreenHUD("✓ App Item Processed!", "success");
-                    setTimeout(hideOnScreenHUD, 3500);
-                }
-            } catch(e) {
-                log(`Error in App solver: ${e.message}`);
-                updateStatus("Error in App solver.");
-                hideOnScreenHUD();
-            } finally {
-                globalState.isRunning = false;
-                chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
-            }
-        })();
+        startCompleteAllAppItemsProcess().finally(() => {
+            globalState.isRunning = false;
+            globalState.abortRequested = false;
+            chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+        });
         sendResponse({ status: "started" });
     }
     if (request.action === "start_complete_course") {
@@ -1347,6 +1307,106 @@ async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
 
 async function completePracticeLabOrLti(userId, courseId, courseSlug, item) {
     return completeUngradedAppItem(userId, courseId, courseSlug, item);
+}
+
+/**
+ * Iterates and completes ALL Ungraded/Graded App, LTI, Lab, Tool, and Workspace items across the entire course.
+ */
+async function startCompleteAllAppItemsProcess() {
+    try {
+        log("Starting Batch App / Tool Solver for all items in course...");
+        updateStatus("Scanning course for App / Lab items...");
+        showOnScreenHUD("FcukCoursera: Scanning Course for App / Lab Items...", "working");
+
+        // 1. If currently on an active App / LTI page, solve live on-screen first
+        const isCurrentPageApp = Array.from(document.querySelectorAll('input[value="agree"], button[aria-label*="Launch"], button[type="submit"], [data-testid*="launch"]')).length > 0 ||
+                                window.location.href.includes('ungradedLti') || 
+                                window.location.href.includes('ungradedApp') ||
+                                window.location.href.includes('gradedLti');
+        if (isCurrentPageApp) {
+            log("[App Solver] Active page is an App / Lab item. Executing on-screen launch first...");
+            showOnScreenHUD("Completing Active App on Screen...", "working");
+            await completeUngradedAppItemInDOM();
+        }
+
+        // 2. Fetch course data & syllabus
+        const { userId, courseId, courseSlug, courseTitle, allItems, syllabusData } = await getCourseData();
+        log(`Resolved Course: "${courseTitle}" (${courseSlug}), User ID: ${userId}`);
+
+        // 3. Pre-fetch completed items to skip already-passed apps
+        const progressData = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
+        log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} completed items in syllabus.`);
+
+        // 4. Filter for ALL App / LTI / Lab / Workspace / Tool items across all modules
+        const appItems = allItems.filter(item => {
+            const cat = classifyItemType(item);
+            return cat === 'app_item' || item.typeName === 'ungradedLti' || item.typeName === 'gradedLti' || 
+                   item.typeName === 'ungradedApp' || item.typeName === 'gradedApp' || item.typeName === 'singlePageApp';
+        });
+
+        log(`Found ${appItems.length} total App / Lab / Tool items in course "${courseTitle}".`);
+
+        if (appItems.length === 0) {
+            // Fallback: If syllabus doesn't list them explicitly, check if current URL has an itemId
+            const { itemId } = extractCourseAndItemIdFromURL(window.location.href);
+            if (itemId) {
+                log(`[App Solver] Processing current page item ID: ${itemId}...`);
+                const mockItem = { id: itemId, name: document.title || "App Item", typeName: "ungradedLti" };
+                await completeUngradedAppItem(userId, courseId, courseSlug, mockItem);
+                showOnScreenHUD("🎉 App Item Completed!", "success");
+                setTimeout(hideOnScreenHUD, 4000);
+                return;
+            }
+
+            log("[App Solver] No App / Tool items found in course syllabus.");
+            updateStatus("No App items found in course.");
+            showOnScreenHUD("✓ No App items found in this course.", "info");
+            setTimeout(hideOnScreenHUD, 3500);
+            return;
+        }
+
+        // Filter for uncompleted items (or include all if progress is unpopulated)
+        const uncompletedApps = appItems.filter(item => !progressData.completedItemIds.has(item.id));
+        const itemsToProcess = uncompletedApps.length > 0 ? uncompletedApps : appItems;
+
+        log(`Processing ${itemsToProcess.length} App item(s) one by one...`);
+        showOnScreenHUD(`Found ${itemsToProcess.length} App / Lab items to complete...`, "working");
+
+        let completedCount = 0;
+
+        for (let i = 0; i < itemsToProcess.length; i++) {
+            if (globalState.abortRequested) {
+                log("[App Solver] Process stopped by user.");
+                break;
+            }
+
+            const item = itemsToProcess[i];
+            log(`\n========================================`);
+            log(`[App Solver] (${i + 1}/${itemsToProcess.length}) Processing: ${item.name} (${item.typeName || 'App'}, ID: ${item.id})...`);
+            log(`========================================`);
+
+            showOnScreenHUD(`📱 Completing App ${i + 1}/${itemsToProcess.length}: ${item.name.substring(0, 35)}...`, "working");
+            updateStatus(`Completing App ${i + 1}/${itemsToProcess.length}: ${item.name}...`);
+
+            // Execute full multi-schema API cascade & live DOM check if matched
+            await completeUngradedAppItem(userId, courseId, courseSlug, item);
+            completedCount++;
+
+            // Small delay between items for rate limiting and server state registration
+            await new Promise(r => setTimeout(r, 1200));
+        }
+
+        log(`\n🎉 [App Solver] Successfully completed ${completedCount} App / Lab items in "${courseTitle}"!`);
+        updateStatus(`Completed ${completedCount} App items!`);
+        showOnScreenHUD(`🎉 Completed ${completedCount} App / Lab Items!`, "success");
+        setTimeout(hideOnScreenHUD, 4500);
+
+    } catch(e) {
+        log(`Error in Batch App solver: ${e.message}`);
+        updateStatus("Error in App solver.");
+        showOnScreenHUD(`Error: ${e.message}`, "error");
+        setTimeout(hideOnScreenHUD, 4000);
+    }
 }
 
 async function completeGenericInteractiveItem(userId, courseId, courseSlug, item, aiConfig) {

@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 📱 **Course-Wide Batch App & Lab Solver (`startCompleteAllAppItemsProcess`)**:
+  - Upgraded the `"📱 Complete App Items"` action button to automatically scan the entire course syllabus, pre-check completed status, and complete **all** Ungraded/Graded App, LTI, Lab, Tool, and Workspace items one by one.
+  - Automatically executes on-screen launch and token registration for the active page if open, then iterates through all remaining app items with multi-schema API cascades (`onDemandAppCompletions.v1`, `onDemandLtiItemPasses.v1`, etc.).
+  - Displays real-time HUD and status updates (`📱 Completing App 1/4...`) with rate-limit pacing.
 - 🛡️ **Checkbox State Synchronization & Double-Toggle Prevention (`setNativeCheckbox`)**:
   - Fixed an issue where programmatic `.click()` on an already-checked element toggled it back to `false`, causing `"Error: Please check the box to continue"`.
   - Implemented state comparison check (`isCurrentlyChecked === shouldBeChecked`) before dispatching natural click gesture.

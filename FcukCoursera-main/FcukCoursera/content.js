@@ -1245,6 +1245,9 @@ async function completeUngradedAppItemInDOM() {
             targetLaunchBtn.classList.remove('cds-button-disabled');
             targetLaunchBtn.classList.remove('disabled');
 
+            // Arm background auto-tab closer to automatically clean up the newly opened lab tab
+            chrome.runtime.sendMessage({ action: "arm_lab_tab_closer", durationMs: 18000 }).catch(() => {});
+
             // 1. If wrapped inside a form, trigger form submission
             const form = targetLaunchBtn.closest('form');
             if (form) {
@@ -1260,7 +1263,14 @@ async function completeUngradedAppItemInDOM() {
 
             const href = targetLaunchBtn.getAttribute('href');
             if (href && href.startsWith('http') && !href.includes('coursera.org/learn')) {
-                try { window.open(href, '_blank'); } catch(e) {}
+                try {
+                    const toolWin = window.open(href, '_blank');
+                    if (toolWin) {
+                        setTimeout(() => {
+                            try { toolWin.close(); } catch(e) {}
+                        }, 6500);
+                    }
+                } catch(e) {}
             }
 
             // 2. Dispatch full trusted pointer/mouse event sequence

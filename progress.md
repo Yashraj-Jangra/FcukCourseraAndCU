@@ -2,6 +2,9 @@
 
 ## Session Summary (2026-08-26)
 
+- 🧹 **Automatic External Lab Tab Closer & Service Worker (`background.js`)**:
+  - Implemented a background service worker with `"tabs"` permissions to track newly launched external lab/app tabs (`skills.network`, `cognitiveclass.ai`, `vocareum.com`, `jupyter`, etc.).
+  - Automatically closes the external tab after 6.5s (allowing full LTI handshake and session token registration to complete on the tool server) without cluttering the user's browser window.
 - ⚡ **Background Active & Visibility Override Engine (`enableBackgroundActiveOverride`)**:
   - Overrides `document.hidden`, `document.visibilityState`, and `document.hasFocus()` so Coursera and external LTI integrations always perceive the tab as active, focused, and in the foreground.
   - Intercepts and suppresses `visibilitychange`, `blur`, and `pagehide` events to prevent background tab timer throttling or session freezing when the user switches tabs.

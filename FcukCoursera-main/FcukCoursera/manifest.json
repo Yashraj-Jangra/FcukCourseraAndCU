@@ -7,8 +7,12 @@
     "activeTab",
     "scripting",
     "cookies",
-    "storage"
+    "storage",
+    "tabs"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "host_permissions": [
     "https://www.coursera.org/*",
     "<all_urls>"

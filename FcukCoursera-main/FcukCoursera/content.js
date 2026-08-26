@@ -1081,8 +1081,8 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
             allowedAction
             warnings
             attempts {
-              attemptCount
-              allowedAttempts
+              attemptsMade
+              attemptsAllowed
               attemptsRemaining
               inProgressAttempt {
                 id
@@ -1143,8 +1143,8 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
                 }
 
                 // Check remaining attempts
-                const allowed = attemptsInfo?.allowedAttempts;
-                const used = attemptsInfo?.attemptCount || 0;
+                const allowed = attemptsInfo?.attemptsAllowed || attemptsInfo?.allowedAttempts;
+                const used = attemptsInfo?.attemptsMade || attemptsInfo?.attemptCount || 0;
                 const remaining = attemptsInfo?.attemptsRemaining;
 
                 if (allowed && remaining !== undefined && remaining <= 0) {
@@ -2685,8 +2685,8 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
         allowedAction
         warnings
         attempts {
-          attemptCount
-          allowedAttempts
+          attemptsMade
+          attemptsAllowed
           attemptsRemaining
           completedAttempts {
             grade

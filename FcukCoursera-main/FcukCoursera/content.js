@@ -1168,8 +1168,8 @@ async function completeUngradedAppItemInDOM() {
             }
         }
 
-        // Wait 1200ms for React Aria state machine to propagate and enable the launch button
-        await new Promise(r => setTimeout(r, 1200));
+        // Wait 300ms for React Aria state machine to propagate and enable the launch button
+        await new Promise(r => setTimeout(r, 300));
 
         // 2. Locate and Click Launch App CTA (<button type="submit">, aria-label="Launch app. Opens in new window", etc.)
         const launchKeywords = [
@@ -1209,10 +1209,10 @@ async function completeUngradedAppItemInDOM() {
             }
         }
 
-        // Polling fallback: Wait up to 2 seconds for React to mount or enable button
+        // Polling fallback: Wait up to 1.5 seconds for React to mount or enable button
         if (!targetLaunchBtn) {
-            for (let waitCount = 0; waitCount < 4; waitCount++) {
-                await new Promise(r => setTimeout(r, 500));
+            for (let waitCount = 0; waitCount < 3; waitCount++) {
+                await new Promise(r => setTimeout(r, 400));
                 const btns = Array.from(document.querySelectorAll('button, a[role="button"], [class*="Button"]'));
                 for (const el of btns) {
                     const text = (el.innerText || el.textContent || '').trim().toLowerCase();
@@ -1246,7 +1246,7 @@ async function completeUngradedAppItemInDOM() {
             targetLaunchBtn.classList.remove('disabled');
 
             // Arm background auto-tab closer to automatically clean up the newly opened lab tab
-            chrome.runtime.sendMessage({ action: "arm_lab_tab_closer", durationMs: 18000 }).catch(() => {});
+            chrome.runtime.sendMessage({ action: "arm_lab_tab_closer", durationMs: 12000 }).catch(() => {});
 
             // 1. If wrapped inside a form, trigger form submission
             const form = targetLaunchBtn.closest('form');
@@ -1268,7 +1268,7 @@ async function completeUngradedAppItemInDOM() {
                     if (toolWin) {
                         setTimeout(() => {
                             try { toolWin.close(); } catch(e) {}
-                        }, 6500);
+                        }, 3500);
                     }
                 } catch(e) {}
             }
@@ -1284,9 +1284,9 @@ async function completeUngradedAppItemInDOM() {
             }
             actionTaken = true;
 
-            // 3. Keep session active for 5s so Coursera registers launch callback
+            // 3. Keep session active for 2s so Coursera registers launch callback
             log(`[App / Tool Solver] Keeping session active for token registration...`);
-            for (let sec = 5; sec > 0; sec--) {
+            for (let sec = 2; sec > 0; sec--) {
                 showOnScreenHUD(`Registering App Tokens (${sec}s)...`, "working");
                 await new Promise(r => setTimeout(r, 1000));
             }
@@ -1417,7 +1417,7 @@ async function processCurrentAppQueueStep() {
             updateStatus(`All ${total} App items completed!`);
             showOnScreenHUD(`🎉 All ${total} App / Lab Items Completed!`, "success");
             await chrome.storage.local.remove(['activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId']);
-            setTimeout(hideOnScreenHUD, 4500);
+            setTimeout(hideOnScreenHUD, 3500);
             chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
             return;
         }
@@ -1434,19 +1434,46 @@ async function processCurrentAppQueueStep() {
             log(`[App Navigator] Opening item page: ${item.url}`);
             showOnScreenHUD(`📱 Navigating to App (${currentIndex + 1}/${total}): ${item.name.substring(0, 30)}...`, "working");
             updateStatus(`Opening App ${currentIndex + 1}/${total}: ${item.name}...`);
-            await new Promise(r => setTimeout(r, 600));
+            await new Promise(r => setTimeout(r, 200));
             window.location.href = item.url;
             return;
+        }
+
+        // Check if active page is already marked completed or passed on screen
+        const completedBadge = document.querySelector('[data-testid="item-status-completed"], .cds-badge, [aria-label*="Completed"], [aria-label*="Passed"], [class*="completed"], [class*="Passed"]');
+        if (completedBadge) {
+            const badgeText = (completedBadge.innerText || completedBadge.getAttribute('aria-label') || '').toLowerCase();
+            if (badgeText.includes('completed') || badgeText.includes('passed') || badgeText.includes('100%')) {
+                log(`[App Navigator] Item "${item.name}" is already marked completed/passed on screen! Skipping.`);
+                showOnScreenHUD(`✓ Already Completed: ${item.name.substring(0, 25)}`, "info");
+                
+                const nextIndex = currentIndex + 1;
+                await chrome.storage.local.set({ appQueueIndex: nextIndex });
+                
+                if (nextIndex < total) {
+                    const nextItem = data.activeAppQueue[nextIndex];
+                    await new Promise(r => setTimeout(r, 200));
+                    window.location.href = nextItem.url;
+                } else {
+                    log(`\n🎉 [App Navigator] Successfully completed all ${total} App / Lab items!`);
+                    updateStatus(`All ${total} App items completed!`);
+                    showOnScreenHUD(`🎉 All ${total} App / Lab Items Completed!`, "success");
+                    await chrome.storage.local.remove(['activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId']);
+                    setTimeout(hideOnScreenHUD, 3500);
+                    chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+                }
+                return;
+            }
         }
 
         // We ARE on this item's page! Run on-screen DOM solver!
         showOnScreenHUD(`📱 Solving On-Screen (${currentIndex + 1}/${total}): ${item.name.substring(0, 30)}...`, "working");
         updateStatus(`Solving App (${currentIndex + 1}/${total}): ${item.name}...`);
         
-        // Wait 1.8s for React Aria DOM to mount
-        await new Promise(r => setTimeout(r, 1800));
+        // Quick 400ms wait for React Aria DOM to mount
+        await new Promise(r => setTimeout(r, 400));
 
-        // 1. Live DOM solver (checks box, submits LTI form to launch app in new tab, holds 5s tokens, clicks finish)
+        // 1. Live DOM solver (checks box, submits LTI form to launch app in new tab, holds 2s tokens, clicks finish)
         await completeUngradedAppItemInDOM();
 
         // 2. Multi-schema background API passes
@@ -1458,16 +1485,16 @@ async function processCurrentAppQueueStep() {
 
         if (nextIndex < total) {
             const nextItem = data.activeAppQueue[nextIndex];
-            log(`[App Navigator] Item ${currentIndex + 1}/${total} finished. Navigating to next item: ${nextItem.name}...`);
+            log(`[App Navigator] Item ${currentIndex + 1}/${total} finished. Moving to next item: ${nextItem.name}...`);
             showOnScreenHUD(`✓ Done! Moving to Next App (${nextIndex + 1}/${total}): ${nextItem.name.substring(0, 25)}...`, "working");
-            await new Promise(r => setTimeout(r, 1800));
+            await new Promise(r => setTimeout(r, 400));
             window.location.href = nextItem.url;
         } else {
             log(`\n🎉 [App Navigator] Successfully completed all ${total} App / Lab items!`);
             updateStatus(`All ${total} App items completed!`);
             showOnScreenHUD(`🎉 All ${total} App / Lab Items Completed!`, "success");
             await chrome.storage.local.remove(['activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId']);
-            setTimeout(hideOnScreenHUD, 4500);
+            setTimeout(hideOnScreenHUD, 3500);
             chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
         }
 
@@ -1475,7 +1502,7 @@ async function processCurrentAppQueueStep() {
         log(`Notice in App Navigator: ${e.message}`);
         updateStatus("Error in App solver.");
         showOnScreenHUD(`Notice: ${e.message}`, "error");
-        setTimeout(hideOnScreenHUD, 4000);
+        setTimeout(hideOnScreenHUD, 3500);
     }
 }
 
@@ -1510,7 +1537,7 @@ async function startCompleteAllAppItemsProcess() {
                 const mockItem = { id: itemId, name: document.title || "App Item", typeName: "ungradedLti" };
                 await completeUngradedAppItem(userId, courseId, courseSlug, mockItem);
                 showOnScreenHUD("🎉 App Item Completed!", "success");
-                setTimeout(hideOnScreenHUD, 4000);
+                setTimeout(hideOnScreenHUD, 3500);
                 return;
             }
 
@@ -1521,11 +1548,19 @@ async function startCompleteAllAppItemsProcess() {
             return;
         }
 
-        // Filter for uncompleted items (or all if none completed yet)
+        // Filter strictly for uncompleted items
         const uncompletedApps = appItems.filter(item => !progressData.completedItemIds.has(item.id));
-        const itemsToProcess = uncompletedApps.length > 0 ? uncompletedApps : appItems;
+        
+        if (uncompletedApps.length === 0) {
+            log(`[App Solver] All ${appItems.length} App / Lab items in "${courseTitle}" are already completed! Zero items need solving.`);
+            updateStatus("All App items already completed!");
+            showOnScreenHUD(`✓ All ${appItems.length} App items are already completed!`, "success");
+            setTimeout(hideOnScreenHUD, 3500);
+            return;
+        }
 
-        log(`Queued ${itemsToProcess.length} App item(s) for live multi-page on-screen completion.`);
+        const itemsToProcess = uncompletedApps;
+        log(`Queued ${itemsToProcess.length} uncompleted App item(s) (Skipped ${appItems.length - itemsToProcess.length} already completed items).`);
 
         // Store persistent queue in chrome.storage.local
         const queueData = {
@@ -1558,7 +1593,7 @@ async function startCompleteAllAppItemsProcess() {
         log(`Error in Batch App initialization: ${e.message}`);
         updateStatus("Error in App solver.");
         showOnScreenHUD(`Error: ${e.message}`, "error");
-        setTimeout(hideOnScreenHUD, 4000);
+        setTimeout(hideOnScreenHUD, 3500);
     }
 }
 
@@ -4922,7 +4957,7 @@ Strict Safety & Style Guidelines:
             if (document.readyState !== 'complete') {
                 await new Promise(r => window.addEventListener('load', r, { once: true }));
             }
-            await new Promise(r => setTimeout(r, 1500));
+            await new Promise(r => setTimeout(r, 400));
             await processCurrentAppQueueStep();
         }
     } catch(e) {

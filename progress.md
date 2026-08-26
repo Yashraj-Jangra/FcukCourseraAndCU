@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- ⚡ **Strict Uncompleted App Item Filtering & Accelerated Navigation Engine**:
+  - Filtered out all completed/passed items upfront, completely eliminating redundant re-attempts on already completed apps.
+  - Added on-screen completion badge verification (`item-status-completed`, `Passed`) to skip completed pages immediately without waiting.
+  - Drastically optimized navigation and launch delays: reduced DOM mount wait to 400ms, token wait to 2s, tab auto-close to 3.5s, and inter-item transition to 400ms for rapid consecutive completions.
 - 🧹 **Automatic External Lab Tab Closer & Service Worker (`background.js`)**:
   - Implemented a background service worker with `"tabs"` permissions to track newly launched external lab/app tabs (`skills.network`, `cognitiveclass.ai`, `vocareum.com`, `jupyter`, etc.).
   - Automatically closes the external tab after 6.5s (allowing full LTI handshake and session token registration to complete on the tool server) without cluttering the user's browser window.

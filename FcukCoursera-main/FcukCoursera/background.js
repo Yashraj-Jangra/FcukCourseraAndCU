@@ -43,7 +43,7 @@ chrome.tabs.onCreated.addListener((newTab) => {
     const openerId = newTab.openerTabId;
     const tabId = newTab.id;
 
-    // Schedule tab closure after 6.5 seconds (allowing LTI auth token handshakes to finish on the external server)
+    // Schedule tab closure after 3.5 seconds (allowing LTI auth token handshakes to finish on the external server)
     setTimeout(async () => {
         try {
             const currentTab = await chrome.tabs.get(tabId);
@@ -63,7 +63,7 @@ chrome.tabs.onCreated.addListener((newTab) => {
         } catch (e) {
             // Tab already closed by user or navigation
         }
-    }, 6500);
+    }, 3500);
 });
 
 // Also track when an existing blank/loading tab navigates to a known tool domain
@@ -77,7 +77,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                     await chrome.tabs.remove(tabId);
                     console.log(`[Auto Tab Closer] Closed tool tab: ${tabId}`);
                 } catch (e) {}
-            }, 6500);
+            }, 3500);
         }
     }
 });

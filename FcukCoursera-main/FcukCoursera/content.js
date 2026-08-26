@@ -1,3 +1,39 @@
+// Background Active & Visibility Override (Keeps Coursera active, focused, and awake in background tabs)
+(function enableBackgroundActiveOverride() {
+    try {
+        // 1. Override document visibility properties so Coursera always perceives foreground state
+        Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
+        Object.defineProperty(document, 'webkitVisibilityState', { get: () => 'visible', configurable: true });
+        
+        if (typeof document.hasFocus === 'function') {
+            document.hasFocus = () => true;
+        }
+
+        // 2. Intercept and stop visibilitychange and blur events from throttling timers
+        const preventIdleEvents = (e) => {
+            if (e.type === 'visibilitychange' || e.type === 'webkitvisibilitychange' || e.type === 'blur' || e.type === 'pagehide') {
+                e.stopImmediatePropagation();
+            }
+        };
+        window.addEventListener('visibilitychange', preventIdleEvents, true);
+        document.addEventListener('visibilitychange', preventIdleEvents, true);
+        window.addEventListener('blur', preventIdleEvents, true);
+
+        // 3. Keep-alive heartbeat loop to prevent background sleep and maintain session tokens
+        if (!window.__fcukCourseraHeartbeat) {
+            window.__fcukCourseraHeartbeat = setInterval(() => {
+                try {
+                    window.dispatchEvent(new Event('focus'));
+                    document.dispatchEvent(new Event('focus'));
+                } catch(e) {}
+            }, 2500);
+        }
+    } catch(e) {
+        console.log("Notice in visibility override:", e);
+    }
+})();
+
 // Global State
 let globalState = {
     isRunning: false,
@@ -202,8 +238,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+function isAppOrToolItem(item) {
+    if (!item) return false;
+    const type = String(item.typeName || item.contentSummary?.typeName || item.content?.typeName || item.itemMetadata?.typeName || '').toLowerCase();
+    const name = String(item.name || '').toLowerCase();
+    const slug = String(item.slug || '').toLowerCase();
+
+    // 1. Definite App, LTI, Tool, and Lab Types
+    const appTypes = [
+        'app', 'lti', 'lab', 'workspace', 'tool', 'singlepageapp', 'openlearningapp', 
+        'jupyter', 'notebook', 'sandbox', 'cloudide', 'widget', 'programming', 
+        'gradedprogramming', 'ungradedprogramming', 'gradedlti', 'ungradedlti', 
+        'gradedapp', 'ungradedapp', 'gradedlab', 'ungradedlab', 'gradedworkspace', 'ungradedworkspace'
+    ];
+    if (appTypes.some(t => type.includes(t))) {
+        if (type === 'lecture' || type === 'video') return false;
+        return true;
+    }
+
+    // 2. Keyword Match in Name or Slug (Hands-on labs, guided projects, exercises, tools)
+    const appKeywords = [
+        'hands-on lab', 'hands on lab', 'lab:', 'lab -', 'lab', 'practice lab', 
+        'ungraded lab', 'workspace', 'jupyter', 'notebook', 'sandbox', 'cloud ide', 
+        'rstudio', 'vscode', 'visual studio', 'app:', 'tool:', 'external tool', 
+        'interactive tool', 'interactive app', 'simulation', 'virtual lab', 
+        'hands-on', 'hands on', 'exercise:', 'exercise -', 'guided project',
+        'practice assignment: hands-on', 'programming assignment'
+    ];
+    if (appKeywords.some(kw => name.includes(kw) || slug.includes(kw))) {
+        if (type === 'lecture' || type === 'video') return false;
+        return true;
+    }
+
+    return false;
+}
+
 function classifyItemType(item) {
-    const type = (item.typeName || '').toLowerCase();
+    const type = (item.typeName || item.contentSummary?.typeName || '').toLowerCase();
     const name = (item.name || '').toLowerCase();
 
     if (type === 'lecture' || type.includes('video')) return 'lecture';
@@ -211,10 +282,8 @@ function classifyItemType(item) {
     if (type.includes('discussion') || name.includes('discussion prompt')) return 'discussion';
     if (type.includes('dialogue') || type.includes('roleplay') || name.includes('dialogue') || name.includes('conversation')) return 'dialogue';
     
-    // Ungraded / Upgraded App & LTI items
-    if (type.includes('app') || type.includes('lti') || type.includes('lab') || type.includes('tool') || 
-        type.includes('workspace') || name.includes('lab') || name.includes('jupyter') || 
-        name.includes('workspace') || name.includes('app') || name.includes('tool')) {
+    // Ungraded / Upgraded App & LTI items (Checked BEFORE generic quizzes)
+    if (isAppOrToolItem(item)) {
         return 'app_item';
     }
 
@@ -224,9 +293,9 @@ function classifyItemType(item) {
     
     // Quizzes, assignments, activities, exercises, diagnostics, and programming items
     if (type.includes('quiz') || type.includes('exam') || type.includes('assignment') || type.includes('widget') || 
-        type.includes('practice') || type.includes('programming') || type.includes('diagnostic') ||
+        type.includes('practice') || type.includes('diagnostic') ||
         name.includes('practice quiz') || name.includes('practice assignment') || name.includes('activity:') || 
-        name.includes('exercise:') || name.includes('quiz:') || name.includes('assignment:')) {
+        name.includes('quiz:') || name.includes('assignment:')) {
         return 'quiz_assignment';
     }
 
@@ -1418,11 +1487,7 @@ async function startCompleteAllAppItemsProcess() {
         log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} completed items in syllabus.`);
 
         // 3. Filter for ALL App / LTI / Lab / Workspace / Tool items across all modules
-        const appItems = allItems.filter(item => {
-            const cat = classifyItemType(item);
-            return cat === 'app_item' || item.typeName === 'ungradedLti' || item.typeName === 'gradedLti' || 
-                   item.typeName === 'ungradedApp' || item.typeName === 'gradedApp' || item.typeName === 'singlePageApp';
-        });
+        const appItems = allItems.filter(item => isAppOrToolItem(item));
 
         log(`Found ${appItems.length} total App / Lab / Tool items in course "${courseTitle}".`);
 
@@ -1456,11 +1521,15 @@ async function startCompleteAllAppItemsProcess() {
         const queueData = {
             activeAppQueue: itemsToProcess.map(it => {
                 const typePath = it.typeName || 'ungradedLti';
+                const directTypes = ['ungradedLti', 'gradedLti', 'ungradedApp', 'gradedApp', 'singlePageApp', 'workspace', 'ungradedLab', 'gradedLab'];
+                const targetUrl = directTypes.includes(typePath)
+                    ? `https://www.coursera.org/learn/${courseSlug}/${typePath}/${it.id}`
+                    : `https://www.coursera.org/learn/${courseSlug}/home/item/${it.id}`;
                 return {
                     id: it.id,
                     name: it.name,
                     typeName: typePath,
-                    url: `https://www.coursera.org/learn/${courseSlug}/${typePath}/${it.id}`
+                    url: targetUrl
                 };
             }),
             appQueueIndex: 0,
@@ -1889,12 +1958,12 @@ async function processQuizItem(userId, courseId, item, aiConfig, courseContext =
     const discussionTypes = ['discussionPrompt', 'discussionQuestion', 'gradedDiscussionPrompt', 'discussion'];
     const dialogueTypes = ['dialogue', 'dialogueItem', 'interactiveDialogue', 'roleplay', 'conversationSimulation'];
 
-    if (examTypes.includes(item.typeName)) {
+    if (isAppOrToolItem(item)) {
+        await completeUngradedAppItem(userId, courseId, '', item);
+    } else if (examTypes.includes(item.typeName)) {
         await processExamItem(userId, courseId, item, aiConfig, courseContext);
     } else if (assignmentTypes.includes(item.typeName)) {
         await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
-    } else if (appTypes.includes(item.typeName)) {
-        await completeUngradedAppItem(userId, courseId, '', item);
     } else if (discussionTypes.includes(item.typeName)) {
         await completeDiscussionPrompt(userId, courseId, '', item, aiConfig, courseContext);
     } else if (dialogueTypes.includes(item.typeName)) {

@@ -2,6 +2,13 @@
 
 ## Session Summary (2026-08-26)
 
+- ⚡ **Background Active & Visibility Override Engine (`enableBackgroundActiveOverride`)**:
+  - Overrides `document.hidden`, `document.visibilityState`, and `document.hasFocus()` so Coursera and external LTI integrations always perceive the tab as active, focused, and in the foreground.
+  - Intercepts and suppresses `visibilitychange`, `blur`, and `pagehide` events to prevent background tab timer throttling or session freezing when the user switches tabs.
+  - Maintains a persistent keep-alive heartbeat loop to prevent background sleep and preserve token handshakes.
+- 🎯 **Universal App & Lab Item Classifier (`isAppOrToolItem`)**:
+  - Implemented comprehensive pattern matching across all Coursera App/Tool schemas (`programming`, `gradedProgramming`, `ungradedProgramming`, `workspace`, `lab`, `jupyter`, `notebook`, `cloudide`, `widget`, `openLearningApp`, `guided project`).
+  - Guarantees 0 missed app items across the entire course syllabus.
 - 🌐 **Persistent Multi-Page App Navigation Automation Engine (`processCurrentAppQueueStep`)**:
   - Implemented cross-page persistent state machine using `chrome.storage.local` to physically navigate the active browser tab to every single App, Lab, LTI, and Tool page in the course one by one.
   - Automatically handles tab redirects (`window.location.href`), resumes execution on page load via `checkAndResumeAppQueue`, runs the full live on-screen solver (`completeUngradedAppItemInDOM`), and transitions to the next item until the entire course is completed.

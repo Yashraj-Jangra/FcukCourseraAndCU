@@ -1019,11 +1019,104 @@ Strict Safety & Style Guidelines:
 }
 
 /**
+ * Live On-Screen Ungraded App / LTI / Tool Solver:
+ * 1. Checks all "I agree" / Terms / Consent checkboxes on the active page
+ * 2. Finds and clicks "Launch App" / "Open Tool" / "Open Workspace" / "Go to App" button or link
+ * 3. Triggers window.open for external tool URL in new browser tab
+ * 4. Displays live status HUD and waits 5s for Coursera session tokens to register
+ * 5. Clicks "Mark as completed" / "Done" / "Submit" button if present
+ * 6. Dispatches full API completion cascade
+ */
+async function completeUngradedAppItemInDOM() {
+    try {
+        log("[App / Tool Solver] Inspecting active page for App / Tool / Lab elements...");
+        showOnScreenHUD("FcukCoursera: Processing App / Tool Assignment...", "working");
+
+        // 1. Check all consent / "I agree" / T&C checkboxes on page
+        const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+        let checkedAny = false;
+        for (const cb of checkboxes) {
+            if (!cb.checked) {
+                log(`[App / Tool Solver] Checking consent / terms checkbox...`);
+                clickNativeOption(cb);
+                checkedAny = true;
+            }
+        }
+        if (checkedAny) {
+            await new Promise(r => setTimeout(r, 600));
+        }
+
+        // 2. Locate Launch / Open button or link
+        const allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"]'));
+        const launchKeywords = [
+            'launch app', 'open tool', 'open workspace', 'open app', 'go to tool', 
+            'launch', 'open lab', 'start lab', 'launch lab', 'open in new tab', 
+            'launch external tool', 'view assignment', 'open in new window', 
+            'open tool in new window', 'start assignment', 'open assignment', 'start', 'open'
+        ];
+
+        let targetLaunchBtn = null;
+        for (const el of allCandidates) {
+            const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            const testId = (el.getAttribute('data-testid') || el.getAttribute('data-e2e') || '').toLowerCase();
+
+            // Ignore navigation buttons
+            if (text === 'next' || text === 'previous' || text.includes('go to next')) continue;
+
+            if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.startsWith(kw))) {
+                targetLaunchBtn = el;
+                break;
+            }
+        }
+
+        if (targetLaunchBtn) {
+            log(`[App / Tool Solver] Found "${targetLaunchBtn.innerText || 'Launch App'}". Triggering launch...`);
+            showOnScreenHUD(`Launching: ${targetLaunchBtn.innerText || 'App'}...`, "working");
+
+            const href = targetLaunchBtn.getAttribute('href');
+            if (href && href.startsWith('http') && !href.includes('coursera.org/learn')) {
+                try { window.open(href, '_blank'); } catch(e) {}
+            }
+            targetLaunchBtn.click();
+
+            // 3. Keep session active for 5s so Coursera registers launch callback
+            log(`[App / Tool Solver] Keeping session active for token registration...`);
+            for (let sec = 5; sec > 0; sec--) {
+                showOnScreenHUD(`Registering App Tokens (${sec}s)...`, "working");
+                await new Promise(r => setTimeout(r, 1000));
+            }
+
+            // 4. Check for "Mark as Completed" / "Done" / "Submit" button
+            const confirmButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'));
+            const finishKeywords = ['mark as completed', 'mark as done', 'i have completed this', 'complete assignment', 'mark completed', 'done', 'submit'];
+            for (const fBtn of confirmButtons) {
+                const fText = (fBtn.innerText || fBtn.textContent || '').trim().toLowerCase();
+                if (finishKeywords.some(kw => fText === kw || fText.includes(kw))) {
+                    log(`[App / Tool Solver] Found confirmation button "${fBtn.innerText || 'Mark as Completed'}". Clicking...`);
+                    fBtn.click();
+                    await new Promise(r => setTimeout(r, 1000));
+                    break;
+                }
+            }
+
+            showOnScreenHUD("🎉 App Assignment Completed!", "success");
+            log("[App / Tool Solver] Live app completion finished successfully!");
+            return true;
+        }
+
+    } catch(e) {
+        log(`Notice in App DOM solver: ${e.message}`);
+    }
+    return false;
+}
+
+/**
  * Handles Ungraded/Graded App, LTI, Tool, and Lab items:
  * - Checks T&C / "I agree" and third-party consent checkboxes
  * - Clicks "Launch App" / "Open Tool" button or link (and triggers window.open)
  * - Waits active for 5s for session tokens and redirects
- * - Dispatches full API completion cascade across all Coursera endpoints
+ * - Dispatches full multi-schema API completion cascade across all Coursera endpoints
  */
 async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
     try {
@@ -1032,58 +1125,19 @@ async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
         // If user is currently on this app page in DOM, interact with on-screen launch form
         const isCurrentPage = window.location.href.includes(item.id);
         if (isCurrentPage) {
-            log(`[App / Tool Item] Page active in browser tab. Checking "I agree" and launching app...`);
-
-            // 1. Check any consent / "I agree" / T&C checkbox
-            const consentCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => {
-                const labelTxt = (cb.closest('label')?.innerText || cb.parentElement?.innerText || cb.getAttribute('aria-label') || '').toLowerCase();
-                const testId = (cb.getAttribute('data-testid') || cb.name || cb.id || '').toLowerCase();
-                return labelTxt.includes('agree') || labelTxt.includes('terms') || labelTxt.includes('privacy') || labelTxt.includes('consent') || labelTxt.includes('data') || labelTxt.includes('third-party') || labelTxt.includes('tool') || testId.includes('agree') || testId.includes('consent') || testId.includes('terms');
-            });
-
-            for (const cb of consentCheckboxes) {
-                if (!cb.checked) {
-                    log(`[App / Tool Item] Checking "I agree" / terms consent checkbox...`);
-                    clickNativeOption(cb);
-                }
-            }
-
-            await new Promise(r => setTimeout(r, 600));
-
-            // 2. Click Launch / Open button or link
-            const launchButtons = Array.from(document.querySelectorAll('button, a[role="button"], a[target="_blank"], a[href*="http"]'));
-            const launchKeywords = ['launch app', 'open tool', 'open workspace', 'open app', 'go to tool', 'launch', 'open', 'start lab', 'launch lab', 'open in new tab'];
-            
-            let launched = false;
-            for (const btn of launchButtons) {
-                const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
-                const testId = (btn.getAttribute('data-testid') || '').toLowerCase();
-                if (launchKeywords.some(kw => txt === kw || testId.includes(kw) || txt.includes(kw))) {
-                    log(`[App / Tool Item] Found "${btn.innerText || 'Launch App'}" button. Launching...`);
-                    const href = btn.getAttribute('href');
-                    if (href && href.startsWith('http')) {
-                        try { window.open(href, '_blank'); } catch(e) {}
-                    }
-                    btn.click();
-                    launched = true;
-                    break;
-                }
-            }
-
-            // Keep session active for 5 seconds for authentication token registration and redirect handshakes
-            log(`[App / Tool Item] Keeping session active for token registration...`);
-            await new Promise(r => setTimeout(r, 5000));
+            log(`[App / Tool Item] Page active in browser tab. Executing live on-screen app launcher...`);
+            await completeUngradedAppItemInDOM();
         }
 
-        // Background API pass registrations
+        // Multi-schema API pass registrations
         const headers = getCourseraHeaders();
-        const postBody = JSON.stringify({
-            courseId: courseId,
-            itemId: item.id,
-            userId: Number(userId),
-            status: "COMPLETED",
-            isCompleted: true
-        });
+        const postBodies = [
+            JSON.stringify({ courseId: courseId, itemId: item.id, userId: Number(userId), status: "COMPLETED", isCompleted: true }),
+            JSON.stringify({ courseId: courseId, itemId: item.id, userId: Number(userId), isPassed: true, fractionalScore: 1.0 }),
+            JSON.stringify({ courseId: courseId, itemId: item.id, userId: Number(userId), progressState: "COMPLETED" }),
+            JSON.stringify({ id: `${userId}~${courseId}~${item.id}`, isCompleted: true }),
+            JSON.stringify({ id: `${courseId}~${item.id}`, isCompleted: true })
+        ];
 
         const appEndpoints = [
             `https://www.coursera.org/api/onDemandAppCompletions.v1`,
@@ -1091,13 +1145,19 @@ async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
             `https://www.coursera.org/api/onDemandWidgetPasses.v1`,
             `https://www.coursera.org/api/onDemandAssignmentPasses.v1`,
             `https://www.coursera.org/api/onDemandSupplementCompletions.v1`,
-            `https://www.coursera.org/api/onDemandLtiLaunches.v1`
+            `https://www.coursera.org/api/onDemandLtiLaunches.v1`,
+            `https://www.coursera.org/api/onDemandItemViews.v1`,
+            `https://www.coursera.org/api/onDemandLearnerItemProgresses.v1`,
+            `https://www.coursera.org/api/openLearningAppSessions.v1`,
+            `https://www.coursera.org/api/onDemandWorkspaceSessions.v1`
         ];
 
         for (const ep of appEndpoints) {
-            try {
-                await fetch(ep, { method: 'POST', headers, body: postBody, credentials: 'include', signal: AbortSignal.timeout(5000) });
-            } catch(e) {}
+            for (const body of postBodies) {
+                try {
+                    await fetch(ep, { method: 'POST', headers, body, credentials: 'include', signal: AbortSignal.timeout(4000) });
+                } catch(e) {}
+            }
         }
 
         // Supplement & view passes
@@ -1693,33 +1753,7 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
 
 async function markAssignmentCompletedFallback(userId, courseId, item) {
     try {
-        const headers = getCourseraHeaders();
-
-        const postBody = JSON.stringify({
-            courseId: courseId,
-            itemId: item.id,
-            userId: Number(userId),
-            status: "COMPLETED",
-            isCompleted: true
-        });
-
-        const endpoints = [
-            `https://www.coursera.org/api/onDemandAssignmentPasses.v1`,
-            `https://www.coursera.org/api/onDemandAssignmentSubmissions.v1`,
-            `https://www.coursera.org/api/onDemandWidgetProgresses.v1`,
-            `https://www.coursera.org/api/onDemandWidgetPasses.v1`,
-            `https://www.coursera.org/api/onDemandLtiItemPasses.v1`
-        ];
-
-        for (const ep of endpoints) {
-            try {
-                await fetch(ep, { method: 'POST', headers, body: postBody, credentials: 'include' });
-            } catch(e) {}
-        }
-
-        // Mark completion via supplement / item views
-        await completeSingleReading(userId, courseId, '', item.id);
-
+        await completeUngradedAppItem(userId, courseId, '', item);
     } catch(e) {}
 }
 
@@ -4001,9 +4035,9 @@ function clickNativeOption(element) {
 async function startOnScreenQuizSolverProcess(aiConfig, autoSubmit = true) {
     try {
         const modeLabel = autoSubmit ? "Auto-Submit Mode" : "Save as Draft Mode";
-        log(`Starting On-Screen Live DOM Quiz Solver (${modeLabel})...`);
+        log(`Starting On-Screen Live Solver (${modeLabel})...`);
         updateStatus(autoSubmit ? "Solving & Auto-Submitting..." : "Solving & Saving as Draft...");
-        showOnScreenHUD(`FcukCoursera: Analyzing Quiz (${modeLabel})...`, "working");
+        showOnScreenHUD(`FcukCoursera: Analyzing Page (${modeLabel})...`, "working");
 
         const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
         const urlParts = window.location.pathname.split('/').filter(p => p);
@@ -4015,26 +4049,40 @@ async function startOnScreenQuizSolverProcess(aiConfig, autoSubmit = true) {
             assignmentName: cleanTitle
         };
 
-        const result = await solveQuizOnScreenInDOM(aiConfig, courseContext, autoSubmit);
+        // 1. Try Quiz Solver first
+        let result = await solveQuizOnScreenInDOM(aiConfig, courseContext, autoSubmit);
+        
+        // 2. If no quiz questions found, check if it's an App / Tool / Lab assignment
+        if (!result) {
+            log("[On-Screen] Checking if active page is an App / Tool / Lab assignment...");
+            result = await completeUngradedAppItemInDOM();
+        }
+
+        // 3. If still not handled, check if it's an Interactive Dialogue / Simulation
+        if (!result) {
+            log("[On-Screen] Checking if active page is an Interactive Dialogue...");
+            result = await completeDialogueItemInDOM(aiConfig, courseContext);
+        }
+
         if (result) {
             if (autoSubmit) {
-                log("On-Screen Quiz Solving and Submission Completed!");
-                updateStatus("Quiz Submitted Successfully!");
-                showOnScreenHUD("🎉 Quiz Submitted Successfully!", "success");
+                log("On-Screen Solving and Submission Completed!");
+                updateStatus("Item Completed Successfully!");
+                showOnScreenHUD("🎉 Item Completed Successfully!", "success");
             } else {
-                log("On-Screen Quiz Answering Completed! Saved as draft for manual review.");
+                log("On-Screen Answering Completed! Saved as draft for manual review.");
                 updateStatus("Saved as Draft on Screen!");
                 showOnScreenHUD("💾 Saved as Draft! Review and Submit.", "success");
             }
             setTimeout(hideOnScreenHUD, 4500);
         } else {
-            log("On-screen quiz check completed (no active questions found).");
+            log("On-screen check completed.");
             updateStatus("Completed on-screen check.");
             hideOnScreenHUD();
         }
         chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
     } catch(e) {
-        log(`Error in on-screen quiz solver: ${e.message}`);
+        log(`Error in on-screen solver: ${e.message}`);
         updateStatus("Error in on-screen solver.");
         hideOnScreenHUD();
         chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});

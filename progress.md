@@ -2,6 +2,13 @@
 
 ## Session Summary (2026-08-26)
 
+- 📱 **Dedicated Live On-Screen App / Tool Solver (`completeUngradedAppItemInDOM`)**:
+  - Upgraded the on-screen solver (`startOnScreenQuizSolverProcess`) to automatically detect when the page is an Ungraded App Assignment, Tool, Lab, or Dialogue item when no standard quiz questions exist.
+  - Automatically clicks all "I agree" / Terms / third-party consent checkboxes on page.
+  - Detects and triggers "Launch App" / "Open Tool" / "Open Workspace" buttons and opens the external tool tab.
+  - Keeps session active with a 5-second live countdown HUD to ensure authentication tokens register.
+  - Automatically checks and clicks any "Mark as completed" / "Done" / "Submit" confirmation button.
+  - Cascades multi-schema payloads across all 10 Coursera app/LTI/assignment endpoints (`onDemandAppCompletions.v1`, `onDemandLtiItemPasses.v1`, `onDemandWidgetPasses.v1`, `onDemandWorkspaceSessions.v1`, etc.).
 - ⚡ **Multi-Layer Progress Pre-Check Engine Fix (`fetchCourseProgressState`)**:
   - Resolved the 0 completed items issue by replacing single-endpoint query with a 6-layer fallback cascade:
     1. **Syllabus Linked Objects**: Extracts `onDemandCourseProgresses.v1`, `onDemandItemProgresses.v1`, and `onDemandAssignmentPasses.v1` directly from `onDemandCourseMaterials.v2` linked data.

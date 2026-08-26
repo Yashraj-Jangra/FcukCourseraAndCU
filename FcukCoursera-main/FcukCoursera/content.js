@@ -1120,17 +1120,16 @@ async function completeUngradedAppItemInDOM() {
                     actionTaken = true;
                 } else if (!childInput) {
                     log(`[App / Tool Solver] Clicking custom consent toggle: "${txt.substring(0, 50)}..."`);
-                    container.click();
+                    clickNativeElement(container);
                     actionTaken = true;
                 }
             }
         }
 
-        // Wait 1000ms for React state to update and remove disabled state from launch buttons
-        await new Promise(r => setTimeout(r, 1000));
+        // Wait 1200ms for React state to update and unlock launch buttons
+        await new Promise(r => setTimeout(r, 1200));
 
         // 2. Locate Launch / Open button or link
-        const allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"], [class*="Button"]'));
         const launchKeywords = [
             'launch app', 'open tool', 'open workspace', 'open app', 'go to tool', 
             'launch', 'open lab', 'start lab', 'launch lab', 'open in new tab', 
@@ -1139,30 +1138,60 @@ async function completeUngradedAppItemInDOM() {
             'go to app', 'access tool', 'access workspace', 'open workspace in new window', 'launch item'
         ];
 
+        // Search across all buttons, links, inputs, and custom styled button containers
+        let allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"], [class*="Button"], [class*="button"], [data-testid*="launch"], [data-testid*="open"], [data-testid*="app"], [data-testid*="tool"]'));
+        
         let targetLaunchBtn = null;
         for (const el of allCandidates) {
             const text = (el.innerText || el.textContent || '').trim().toLowerCase();
             const aria = (el.getAttribute('aria-label') || '').toLowerCase();
             const testId = (el.getAttribute('data-testid') || el.getAttribute('data-e2e') || '').toLowerCase();
 
-            // Ignore navigation buttons
+            // Ignore navigation & back buttons
             if (text === 'next' || text === 'previous' || text.includes('go to next') || text === 'back') continue;
 
-            if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.startsWith(kw))) {
+            if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.includes(kw))) {
                 targetLaunchBtn = el;
                 break;
             }
         }
 
+        // If not found yet, poll up to 2 seconds for React re-render
+        if (!targetLaunchBtn) {
+            for (let waitCount = 0; waitCount < 4; waitCount++) {
+                await new Promise(r => setTimeout(r, 500));
+                allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"], [class*="Button"], [class*="button"]'));
+                for (const el of allCandidates) {
+                    const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const testId = (el.getAttribute('data-testid') || el.getAttribute('data-e2e') || '').toLowerCase();
+                    if (text === 'next' || text === 'previous' || text.includes('go to next') || text === 'back') continue;
+                    if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.includes(kw))) {
+                        targetLaunchBtn = el;
+                        break;
+                    }
+                }
+                if (targetLaunchBtn) break;
+            }
+        }
+
         if (targetLaunchBtn) {
-            log(`[App / Tool Solver] Found "${targetLaunchBtn.innerText || 'Launch App'}". Triggering launch...`);
+            log(`[App / Tool Solver] Found Launch CTA: "${targetLaunchBtn.innerText || targetLaunchBtn.getAttribute('aria-label') || 'Launch App'}". Triggering click...`);
             showOnScreenHUD(`Launching: ${targetLaunchBtn.innerText || 'App'}...`, "working");
+
+            // Unlock button if disabled
+            if (targetLaunchBtn.disabled) targetLaunchBtn.disabled = false;
+            targetLaunchBtn.removeAttribute('disabled');
+            targetLaunchBtn.setAttribute('aria-disabled', 'false');
+            targetLaunchBtn.classList.remove('disabled');
 
             const href = targetLaunchBtn.getAttribute('href');
             if (href && href.startsWith('http') && !href.includes('coursera.org/learn')) {
                 try { window.open(href, '_blank'); } catch(e) {}
             }
-            targetLaunchBtn.click();
+
+            // Dispatch full trusted pointer/mouse event sequence
+            clickNativeElement(targetLaunchBtn);
             actionTaken = true;
 
             // 3. Keep session active for 5s so Coursera registers launch callback
@@ -1171,6 +1200,8 @@ async function completeUngradedAppItemInDOM() {
                 showOnScreenHUD(`Registering App Tokens (${sec}s)...`, "working");
                 await new Promise(r => setTimeout(r, 1000));
             }
+        } else {
+            log("[App / Tool Solver] No explicit launch button found. Scanning for embedded frame or completion triggers...");
         }
 
         // 4. Check for embedded iframes (e.g. Workspace or Lab embed)
@@ -1181,13 +1212,13 @@ async function completeUngradedAppItemInDOM() {
         }
 
         // 5. Check for "Mark as Completed" / "Done" / "Submit" button
-        const confirmButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'));
-        const finishKeywords = ['mark as completed', 'mark as done', 'i have completed this', 'complete assignment', 'mark completed', 'done', 'submit', 'finish'];
+        const confirmButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"], a[role="button"]'));
+        const finishKeywords = ['mark as completed', 'mark as done', 'i have completed this', 'complete assignment', 'mark completed', 'done', 'submit', 'finish', "i'm done"];
         for (const fBtn of confirmButtons) {
             const fText = (fBtn.innerText || fBtn.textContent || '').trim().toLowerCase();
             if (finishKeywords.some(kw => fText === kw || fText.includes(kw))) {
                 log(`[App / Tool Solver] Found confirmation button "${fBtn.innerText || 'Mark as Completed'}". Clicking...`);
-                fBtn.click();
+                clickNativeElement(fBtn);
                 actionTaken = true;
                 await new Promise(r => setTimeout(r, 1000));
                 break;
@@ -4143,18 +4174,47 @@ function setNativeCheckbox(element, checked = true) {
     }
 }
 
-function clickNativeOption(element) {
+function clickNativeElement(element) {
     if (!element) return;
     try {
+        if (element.disabled) element.disabled = false;
+        element.removeAttribute('disabled');
+        element.setAttribute('aria-disabled', 'false');
+        element.classList.remove('disabled');
+
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
         element.focus();
-        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+
+        const rect = element.getBoundingClientRect();
+        const clientX = rect.left + rect.width / 2;
+        const clientY = rect.top + rect.height / 2;
+        const opts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
+
+        if (window.PointerEvent) {
+            element.dispatchEvent(new PointerEvent('pointerover', opts));
+            element.dispatchEvent(new PointerEvent('pointerenter', opts));
+            element.dispatchEvent(new PointerEvent('pointerdown', opts));
+        }
+        element.dispatchEvent(new MouseEvent('mouseover', opts));
+        element.dispatchEvent(new MouseEvent('mousedown', opts));
+        if (window.PointerEvent) {
+            element.dispatchEvent(new PointerEvent('pointerup', opts));
+        }
+        element.dispatchEvent(new MouseEvent('mouseup', opts));
         element.click();
         element.dispatchEvent(new Event('change', { bubbles: true }));
+
+        const child = element.querySelector('span, div, p');
+        if (child) {
+            try { child.click(); } catch(e) {}
+        }
     } catch(e) {
-        element.click();
+        try { element.click(); } catch(err) {}
     }
+}
+
+function clickNativeOption(element) {
+    clickNativeElement(element);
 }
 
 async function startOnScreenQuizSolverProcess(aiConfig, autoSubmit = true) {

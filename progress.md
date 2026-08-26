@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 🎯 **Coursera Design System (CDS) LTI Form Submission & Universal URL Item Resolver**:
+  - Direct targeting of Coursera's `@react-aria/checkbox` with `aria-labelledby` binding and `value="agree"`.
+  - Dispatches native `<form>` submission (`form.requestSubmit` / `form.submit`) on the LTI launch form wrapping `<button type="submit" aria-label="Launch app...">` to trigger external tool auth handshakes.
+  - Implemented `extractCourseAndItemIdFromURL` to accurately extract `courseSlug` and `itemId` from all Coursera routes (`/ungradedLti/:id/`, `/ungradedApp/:id/`, `/singlePageApp/:id/`, etc.) and send background API passes.
 - 🖱️ **Full Trusted Pointer/Mouse Event Simulation & Launch Button Unlocking (`clickNativeElement`)**:
   - Replaced standard `.click()` with full pointer and mouse coordinate lifecycle simulation (`pointerover` -> `pointerdown` -> `mousedown` -> `pointerup` -> `mouseup` -> `click` -> `change`) with centered `clientX`/`clientY` bounding box coordinates.
   - Automatically strips stuck `disabled` and `aria-disabled="true"` attributes if React state is delayed.

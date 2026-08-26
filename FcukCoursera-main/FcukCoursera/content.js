@@ -181,24 +181,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 showOnScreenHUD("FcukCoursera: Processing App / Tool...", "working");
                 log("[App / Tool Solver] Starting dedicated on-screen App item completion...");
 
-                // 1. Live DOM solver (agree checkbox + launch button + tokens wait + mark complete)
+                // 1. Live DOM solver (React Aria agree checkbox + launch button + form submit + tokens wait + mark complete)
                 const domSuccess = await completeUngradedAppItemInDOM();
 
-                // 2. Also resolve course/user/item IDs from page URL and syllabus to trigger background API passes
+                // 2. Resolve course/user/item IDs from page URL and syllabus to trigger background API passes
                 try {
                     const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
-                    const urlParts = window.location.pathname.split('/').filter(p => p);
-                    const learnIndex = urlParts.indexOf('learn');
-                    const courseSlug = (learnIndex !== -1 && urlParts.length > learnIndex + 1) ? urlParts[learnIndex + 1] : "";
-                    const itemIndex = urlParts.indexOf('item');
-                    const itemId = (itemIndex !== -1 && urlParts.length > itemIndex + 1) ? urlParts[itemIndex + 1] : "";
+                    const { courseSlug, itemId } = extractCourseAndItemIdFromURL(window.location.href);
+
+                    log(`[App / Tool Solver] Resolved Course: "${courseSlug}", Item ID: "${itemId}"`);
 
                     const { userId, courseId } = await getCourseData();
                     if (userId && courseId && itemId) {
-                        const mockItem = { id: itemId, name: cleanTitle || "App Item", typeName: "ungradedApp" };
+                        const mockItem = { id: itemId, name: cleanTitle || "Hands-on Lab", typeName: "ungradedLti" };
+                        log(`[App / Tool Solver] Dispatching multi-schema background API completion passes for item ${itemId}...`);
                         await completeUngradedAppItem(userId, courseId, courseSlug, mockItem);
                     }
-                } catch(e) {}
+                } catch(apiErr) {
+                    log(`Notice in API pass: ${apiErr.message}`);
+                }
 
                 if (domSuccess) {
                     log("[App / Tool Solver] App / Tool item successfully launched and completed!");
@@ -713,27 +714,45 @@ async function completeSingleVideo(userId, courseId, courseSlug, itemId) {
     return true;
 }
 
+function extractCourseAndItemIdFromURL(url = window.location.href) {
+    try {
+        const u = new URL(url);
+        const parts = u.pathname.split('/').filter(p => p);
+        const learnIdx = parts.indexOf('learn');
+        let courseSlug = (learnIdx !== -1 && parts.length > learnIdx + 1) ? parts[learnIdx + 1] : "";
+        if (!courseSlug) {
+            const teachIdx = parts.indexOf('teach');
+            if (teachIdx !== -1 && parts.length > teachIdx + 1) courseSlug = parts[teachIdx + 1];
+            else {
+                const courseIdx = parts.indexOf('course');
+                if (courseIdx !== -1 && parts.length > courseIdx + 1) courseSlug = parts[courseIdx + 1];
+            }
+        }
+        
+        let itemId = "";
+        const itemIdx = parts.indexOf('item');
+        if (itemIdx !== -1 && parts.length > itemIdx + 1) {
+            itemId = parts[itemIdx + 1];
+        } else {
+            const knownTypes = ['ungradedlti', 'ungradedapp', 'singlepageapp', 'supplement', 'lecture', 'exam', 'quiz', 'gradedlti', 'gradedapp', 'assignment', 'ungradedassignment', 'discussionprompt', 'item'];
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (knownTypes.includes(parts[i].toLowerCase())) {
+                    itemId = parts[i + 1];
+                    break;
+                }
+            }
+        }
+        return { courseSlug, itemId };
+    } catch(e) {
+        return { courseSlug: "", itemId: "" };
+    }
+}
+
 async function getCourseData() {
     log("Initializing...");
     
     // 1. Get Course Slug from URL
-    const urlParts = window.location.pathname.split('/').filter(p => p);
-    let courseSlug = null;
-    
-    const learnIndex = urlParts.indexOf('learn');
-    if (learnIndex !== -1 && urlParts.length > learnIndex + 1) {
-        courseSlug = urlParts[learnIndex + 1];
-    } else {
-        const teachIndex = urlParts.indexOf('teach');
-        if (teachIndex !== -1 && urlParts.length > teachIndex + 1) {
-            courseSlug = urlParts[teachIndex + 1];
-        } else {
-            const courseIndex = urlParts.indexOf('course');
-            if (courseIndex !== -1 && urlParts.length > courseIndex + 1) {
-                courseSlug = urlParts[courseIndex + 1];
-            }
-        }
-    }
+    const { courseSlug } = extractCourseAndItemIdFromURL(window.location.href);
 
     if (!courseSlug) {
         throw new Error("Could not find course slug in URL. Please open a Coursera course page (e.g. /learn/course-name).");
@@ -1090,19 +1109,19 @@ async function completeUngradedAppItemInDOM() {
 
         let actionTaken = false;
 
-        // 1. Explicitly find and check "I agree to use this app responsibly" and all consent / T&C checkboxes
+        // 1. Explicitly check React Aria "I agree to use this app responsibly" checkbox
         const consentKeywords = [
             'responsibly', 'responsible', 'i agree to use this app responsibly', 'i agree', 
             'terms', 'consent', 'understand', 'honor code', 'third-party', 'third party', 
             'acceptable use', 'guidelines', 'policy', 'acknowledge', 'accept'
         ];
 
-        // A. Standard and custom ARIA checkboxes
+        // A. Standard & React Aria Checkboxes (cds-241, value="agree", etc.)
         const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"], [aria-checked]'));
         for (const cb of allCheckboxes) {
             const isChecked = cb.checked || cb.getAttribute('aria-checked') === 'true';
             if (!isChecked) {
-                log(`[App / Tool Solver] Checking "I agree to use this app responsibly" / terms checkbox...`);
+                log(`[App / Tool Solver] Checking React Aria consent checkbox (ID: ${cb.id || 'agree'})...`);
                 setNativeCheckbox(cb, true);
                 actionTaken = true;
             }
@@ -1126,10 +1145,10 @@ async function completeUngradedAppItemInDOM() {
             }
         }
 
-        // Wait 1200ms for React state to update and unlock launch buttons
+        // Wait 1200ms for React Aria state machine to propagate and enable the launch button
         await new Promise(r => setTimeout(r, 1200));
 
-        // 2. Locate Launch / Open button or link
+        // 2. Locate and Click Launch App CTA (<button type="submit">, aria-label="Launch app. Opens in new window", etc.)
         const launchKeywords = [
             'launch app', 'open tool', 'open workspace', 'open app', 'go to tool', 
             'launch', 'open lab', 'start lab', 'launch lab', 'open in new tab', 
@@ -1138,35 +1157,45 @@ async function completeUngradedAppItemInDOM() {
             'go to app', 'access tool', 'access workspace', 'open workspace in new window', 'launch item'
         ];
 
-        // Search across all buttons, links, inputs, and custom styled button containers
-        let allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"], [class*="Button"], [class*="button"], [data-testid*="launch"], [data-testid*="open"], [data-testid*="app"], [data-testid*="tool"]'));
-        
         let targetLaunchBtn = null;
-        for (const el of allCandidates) {
-            const text = (el.innerText || el.textContent || '').trim().toLowerCase();
-            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-            const testId = (el.getAttribute('data-testid') || el.getAttribute('data-e2e') || '').toLowerCase();
 
-            // Ignore navigation & back buttons
-            if (text === 'next' || text === 'previous' || text.includes('go to next') || text === 'back') continue;
-
-            if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.includes(kw))) {
-                targetLaunchBtn = el;
+        // Priority A: Direct CDS Launch button (button[type="submit"][aria-label*="Launch"], .cds-button-primary)
+        const primaryLaunchBtns = Array.from(document.querySelectorAll('button[type="submit"], button[aria-label*="Launch"], button[aria-label*="launch"], .cds-button-primary, [data-testid*="launch"]'));
+        for (const pBtn of primaryLaunchBtns) {
+            const txt = (pBtn.innerText || pBtn.textContent || pBtn.getAttribute('aria-label') || '').toLowerCase();
+            if (txt.includes('launch') || txt.includes('open') || pBtn.type === 'submit') {
+                targetLaunchBtn = pBtn;
                 break;
             }
         }
 
-        // If not found yet, poll up to 2 seconds for React re-render
+        // Priority B: Search across all candidate buttons/links if not matched yet
+        if (!targetLaunchBtn) {
+            let allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"], [class*="Button"], [class*="button"]'));
+            for (const el of allCandidates) {
+                const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                const testId = (el.getAttribute('data-testid') || el.getAttribute('data-e2e') || '').toLowerCase();
+
+                if (text === 'next' || text === 'previous' || text.includes('go to next') || text === 'back') continue;
+
+                if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.includes(kw))) {
+                    targetLaunchBtn = el;
+                    break;
+                }
+            }
+        }
+
+        // Polling fallback: Wait up to 2 seconds for React to mount or enable button
         if (!targetLaunchBtn) {
             for (let waitCount = 0; waitCount < 4; waitCount++) {
                 await new Promise(r => setTimeout(r, 500));
-                allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"], [class*="Button"], [class*="button"]'));
-                for (const el of allCandidates) {
+                const btns = Array.from(document.querySelectorAll('button, a[role="button"], [class*="Button"]'));
+                for (const el of btns) {
                     const text = (el.innerText || el.textContent || '').trim().toLowerCase();
                     const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-                    const testId = (el.getAttribute('data-testid') || el.getAttribute('data-e2e') || '').toLowerCase();
                     if (text === 'next' || text === 'previous' || text.includes('go to next') || text === 'back') continue;
-                    if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.includes(kw))) {
+                    if (launchKeywords.some(kw => text === kw || aria.includes(kw) || text.includes(kw))) {
                         targetLaunchBtn = el;
                         break;
                     }
@@ -1176,22 +1205,43 @@ async function completeUngradedAppItemInDOM() {
         }
 
         if (targetLaunchBtn) {
-            log(`[App / Tool Solver] Found Launch CTA: "${targetLaunchBtn.innerText || targetLaunchBtn.getAttribute('aria-label') || 'Launch App'}". Triggering click...`);
+            log(`[App / Tool Solver] Found Launch CTA: "${targetLaunchBtn.getAttribute('aria-label') || targetLaunchBtn.innerText || 'Launch App'}". Submitting...`);
             showOnScreenHUD(`Launching: ${targetLaunchBtn.innerText || 'App'}...`, "working");
 
             // Unlock button if disabled
-            if (targetLaunchBtn.disabled) targetLaunchBtn.disabled = false;
+            targetLaunchBtn.disabled = false;
             targetLaunchBtn.removeAttribute('disabled');
             targetLaunchBtn.setAttribute('aria-disabled', 'false');
+            targetLaunchBtn.classList.remove('cds-button-disabled');
             targetLaunchBtn.classList.remove('disabled');
+
+            // 1. If wrapped inside a form, trigger form submission
+            const form = targetLaunchBtn.closest('form');
+            if (form) {
+                log("[App / Tool Solver] Submitting LTI Launch form...");
+                try {
+                    if (form.requestSubmit) {
+                        form.requestSubmit(targetLaunchBtn);
+                    } else {
+                        form.submit();
+                    }
+                } catch(e) {}
+            }
 
             const href = targetLaunchBtn.getAttribute('href');
             if (href && href.startsWith('http') && !href.includes('coursera.org/learn')) {
                 try { window.open(href, '_blank'); } catch(e) {}
             }
 
-            // Dispatch full trusted pointer/mouse event sequence
+            // 2. Dispatch full trusted pointer/mouse event sequence
             clickNativeElement(targetLaunchBtn);
+            targetLaunchBtn.click();
+
+            // Also click nested label span
+            const innerLabel = targetLaunchBtn.querySelector('.cds-button-label') || targetLaunchBtn.querySelector('span');
+            if (innerLabel) {
+                try { innerLabel.click(); } catch(e) {}
+            }
             actionTaken = true;
 
             // 3. Keep session active for 5s so Coursera registers launch callback
@@ -4161,13 +4211,16 @@ function setNativeCheckbox(element, checked = true) {
         element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
         element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
         element.click();
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
-        // 3. Trigger parent label/container click if exists
-        const label = element.closest('label') || element.parentElement;
+        // 3. Trigger parent label or aria-labelledby element click if exists
+        const ariaLabelId = element.getAttribute('aria-labelledby');
+        const ariaLabelEl = ariaLabelId ? document.getElementById(ariaLabelId) : null;
+        const label = element.closest('label') || document.querySelector(`label[for="${element.id}"]`) || (ariaLabelEl ? ariaLabelEl.closest('label') || ariaLabelEl : null) || element.parentElement;
         if (label && label !== element) {
             label.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            try { label.click(); } catch(e) {}
         }
     } catch(e) {
         try { element.click(); } catch(err) {}

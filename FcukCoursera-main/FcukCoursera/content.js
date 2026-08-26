@@ -1189,31 +1189,6 @@ async function completeUngradedAppItemInDOM() {
             'acceptable use', 'guidelines', 'policy', 'acknowledge', 'accept'
         ];
 
-        // A. Standard & React Aria Checkboxes (cds-241, value="agree", etc.)
-        const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"], [aria-checked]'));
-        for (const cb of allCheckboxes) {
-            log(`[App / Tool Solver] Setting consent checkbox state (ID: ${cb.id || 'agree'})...`);
-            setNativeCheckbox(cb, true);
-            actionTaken = true;
-        }
-        
-        // B. Fallback for custom toggle containers without standard input
-        if (allCheckboxes.length === 0) {
-            const allLabelsAndContainers = Array.from(document.querySelectorAll('label, div[class*="checkbox"], div[class*="Checkbox"], [data-testid*="checkbox"], [data-testid*="consent"], [data-testid*="agree"]'));
-            for (const container of allLabelsAndContainers) {
-                const txt = (container.innerText || container.textContent || '').trim().toLowerCase();
-                if (consentKeywords.some(kw => txt.includes(kw))) {
-                    log(`[App / Tool Solver] Clicking custom consent toggle: "${txt.substring(0, 50)}..."`);
-                    clickNativeElement(container);
-                    actionTaken = true;
-                }
-            }
-        }
-
-        // Wait 300ms for React Aria state machine to propagate and enable the launch button
-        await new Promise(r => setTimeout(r, 300));
-
-        // 2. Locate and Click Launch App CTA (<button type="submit">, aria-label="Launch app. Opens in new window", etc.)
         const launchKeywords = [
             'launch app', 'open tool', 'open workspace', 'open app', 'go to tool', 
             'launch', 'open lab', 'start lab', 'launch lab', 'open in new tab', 
@@ -1224,49 +1199,55 @@ async function completeUngradedAppItemInDOM() {
 
         let targetLaunchBtn = null;
 
-        // Priority A: Direct CDS Launch button (button[type="submit"][aria-label*="Launch"], .cds-button-primary)
-        const primaryLaunchBtns = Array.from(document.querySelectorAll('button[type="submit"], button[aria-label*="Launch"], button[aria-label*="launch"], .cds-button-primary, [data-testid*="launch"]'));
-        for (const pBtn of primaryLaunchBtns) {
-            const txt = (pBtn.innerText || pBtn.textContent || pBtn.getAttribute('aria-label') || '').toLowerCase();
-            if (txt.includes('launch') || txt.includes('open') || pBtn.type === 'submit') {
-                targetLaunchBtn = pBtn;
-                break;
+        // Poll up to 6 times (3 seconds total) for dynamic React Aria elements to mount
+        for (let attempt = 0; attempt < 6; attempt++) {
+            // A. Standard & React Aria Checkboxes (cds-241, value="agree", etc.)
+            const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"], [aria-checked]'));
+            for (const cb of allCheckboxes) {
+                log(`[App / Tool Solver] Setting consent checkbox state (ID: ${cb.id || 'agree'})...`);
+                setNativeCheckbox(cb, true);
+                actionTaken = true;
             }
-        }
+            
+            // B. Fallback for custom toggle containers without standard input
+            const allLabelsAndContainers = Array.from(document.querySelectorAll('label, div[class*="checkbox"], div[class*="Checkbox"], [data-testid*="checkbox"], [data-testid*="consent"], [data-testid*="agree"]'));
+            for (const container of allLabelsAndContainers) {
+                const txt = (container.innerText || container.textContent || '').trim().toLowerCase();
+                if (consentKeywords.some(kw => txt.includes(kw))) {
+                    log(`[App / Tool Solver] Clicking custom consent toggle: "${txt.substring(0, 50)}..."`);
+                    clickNativeElement(container);
+                    actionTaken = true;
+                }
+            }
 
-        // Priority B: Search across all candidate buttons/links if not matched yet
-        if (!targetLaunchBtn) {
-            let allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"], [class*="Button"], [class*="button"]'));
-            for (const el of allCandidates) {
-                const text = (el.innerText || el.textContent || '').trim().toLowerCase();
-                const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-                const testId = (el.getAttribute('data-testid') || el.getAttribute('data-e2e') || '').toLowerCase();
-
-                if (text === 'next' || text === 'previous' || text.includes('go to next') || text === 'back') continue;
-
-                if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.includes(kw))) {
-                    targetLaunchBtn = el;
+            // 2. Locate Launch App CTA
+            const primaryLaunchBtns = Array.from(document.querySelectorAll('button[type="submit"], button[aria-label*="Launch"], button[aria-label*="launch"], .cds-button-primary, [data-testid*="launch"]'));
+            for (const pBtn of primaryLaunchBtns) {
+                const txt = (pBtn.innerText || pBtn.textContent || pBtn.getAttribute('aria-label') || '').toLowerCase();
+                if (txt.includes('launch') || txt.includes('open') || pBtn.type === 'submit') {
+                    targetLaunchBtn = pBtn;
                     break;
                 }
             }
-        }
 
-        // Polling fallback: Wait up to 1.5 seconds for React to mount or enable button
-        if (!targetLaunchBtn) {
-            for (let waitCount = 0; waitCount < 3; waitCount++) {
-                await new Promise(r => setTimeout(r, 400));
-                const btns = Array.from(document.querySelectorAll('button, a[role="button"], [class*="Button"]'));
-                for (const el of btns) {
+            if (!targetLaunchBtn) {
+                const allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"], [class*="Button"], [class*="button"]'));
+                for (const el of allCandidates) {
                     const text = (el.innerText || el.textContent || '').trim().toLowerCase();
                     const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const testId = (el.getAttribute('data-testid') || el.getAttribute('data-e2e') || '').toLowerCase();
+
                     if (text === 'next' || text === 'previous' || text.includes('go to next') || text === 'back') continue;
-                    if (launchKeywords.some(kw => text === kw || aria.includes(kw) || text.includes(kw))) {
+
+                    if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.includes(kw))) {
                         targetLaunchBtn = el;
                         break;
                     }
                 }
-                if (targetLaunchBtn) break;
             }
+
+            if (targetLaunchBtn) break;
+            await new Promise(r => setTimeout(r, 450));
         }
 
         if (targetLaunchBtn) {

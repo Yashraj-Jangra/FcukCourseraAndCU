@@ -150,6 +150,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         sendResponse({ status: "started" });
     }
+    if (request.action === "start_onscreen_quiz_solver") {
+        if (globalState.isRunning) {
+            sendResponse({ status: "already_running" });
+            return;
+        }
+        globalState.isRunning = true;
+        globalState.abortRequested = false;
+        globalState.currentAction = "onscreen_quiz";
+        const aiConfig = request.aiConfig || request.apiKey;
+        startOnScreenQuizSolverProcess(aiConfig).finally(() => { 
+            globalState.isRunning = false;
+            globalState.abortRequested = false;
+        });
+        sendResponse({ status: "started" });
+    }
     if (request.action === "start_complete_course") {
         if (globalState.isRunning) {
             sendResponse({ status: "already_running" });
@@ -1027,6 +1042,19 @@ async function processQuizItem(userId, courseId, item, aiConfig, courseContext =
 async function processExamItem(userId, courseId, item, aiConfig, courseContext = null) {
     try {
         log(`Processing Graded Exam / Assessment: ${item.name}...`);
+        
+        // If the user currently has this exam page open in front of them, solve it on screen!
+        const isCurrentPage = window.location.href.includes(item.id) || !!document.querySelector('.rc-FormPart, [class*="FormPart"], fieldset, [data-testid*="question"]');
+        if (isCurrentPage) {
+            log(`[On-Screen Exam] User is currently on the exam page. Executing live on-screen solver...`);
+            const onScreenSuccess = await solveQuizOnScreenInDOM(aiConfig, courseContext);
+            if (onScreenSuccess) {
+                log(`[On-Screen Exam] Completed and submitted on-screen.`);
+                return;
+            }
+        }
+        
+        // Background GraphQL solver
         await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
     } catch (e) {
         log(`Error processing exam: ${e.message}`);
@@ -3138,6 +3166,406 @@ async function callLLM(prompt, aiConfig) {
         return await callOpenAICompatible(prompt, config);
     } else {
         return await callGemini(config.apiKey, prompt);
+    }
+}
+
+// ==========================================
+// Live On-Screen DOM Quiz & Graded Assignment Solver
+// ==========================================
+
+function showOnScreenHUD(text, type = 'info') {
+    try {
+        let hud = document.getElementById('fcukcoursera-live-hud');
+        if (!hud) {
+            hud = document.createElement('div');
+            hud.id = 'fcukcoursera-live-hud';
+            hud.style.position = 'fixed';
+            hud.style.bottom = '24px';
+            hud.style.right = '24px';
+            hud.style.zIndex = '2147483647';
+            hud.style.padding = '10px 16px';
+            hud.style.borderRadius = '8px';
+            hud.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            hud.style.fontSize = '12px';
+            hud.style.fontWeight = '700';
+            hud.style.color = '#f1f5f9';
+            hud.style.backgroundColor = '#0b0f19';
+            hud.style.border = '1px solid #3b82f6';
+            hud.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.7), 0 0 15px rgba(59, 130, 246, 0.35)';
+            hud.style.display = 'flex';
+            hud.style.alignItems = 'center';
+            hud.style.gap = '8px';
+            hud.style.transition = 'all 0.25s ease';
+            hud.style.pointerEvents = 'none';
+            document.body.appendChild(hud);
+        }
+        let icon = '⚡';
+        let color = '#38bdf8';
+        if (type === 'success') { icon = '✓'; color = '#4ade80'; }
+        else if (type === 'warning') { icon = '⏳'; color = '#facc15'; }
+        else if (type === 'error') { icon = '✕'; color = '#f87171'; }
+        
+        hud.innerHTML = `<span style="color: ${color}; font-size: 14px;">${icon}</span> <span>${text}</span>`;
+    } catch(e) {}
+}
+
+function hideOnScreenHUD() {
+    try {
+        const hud = document.getElementById('fcukcoursera-live-hud');
+        if (hud) {
+            hud.style.opacity = '0';
+            setTimeout(() => { hud.remove(); }, 300);
+        }
+    } catch(e) {}
+}
+
+// React Synthetic Event & Native Property Setters
+function setNativeInputValue(element, value) {
+    if (!element) return;
+    try {
+        const valueSetter = Object.getOwnPropertyDescriptor(element, 'value')?.set;
+        const prototype = Object.getPrototypeOf(element);
+        const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+        if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
+            prototypeValueSetter.call(element, value);
+        } else if (valueSetter) {
+            valueSetter.call(element, value);
+        } else {
+            element.value = value;
+        }
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch(e) {
+        element.value = value;
+    }
+}
+
+function clickNativeOption(element) {
+    if (!element) return;
+    try {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        element.focus();
+        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        element.click();
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch(e) {
+        element.click();
+    }
+}
+
+async function startOnScreenQuizSolverProcess(aiConfig) {
+    try {
+        log("Starting On-Screen Live DOM Quiz Solver...");
+        updateStatus("Solving quiz in front of user...");
+        showOnScreenHUD("FcukCoursera: Analyzing Quiz Form...", "working");
+
+        const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
+        const urlParts = window.location.pathname.split('/').filter(p => p);
+        const learnIndex = urlParts.indexOf('learn');
+        const courseSlug = (learnIndex !== -1 && urlParts.length > learnIndex + 1) ? urlParts[learnIndex + 1] : "";
+        const courseContext = {
+            courseSlug: courseSlug,
+            courseTitle: cleanTitle || courseSlug,
+            assignmentName: cleanTitle
+        };
+
+        const result = await solveQuizOnScreenInDOM(aiConfig, courseContext);
+        if (result) {
+            log("On-Screen Quiz Solving and Submission Completed!");
+            updateStatus("Quiz Submitted Successfully!");
+            showOnScreenHUD("🎉 Quiz Submitted Successfully!", "success");
+            setTimeout(hideOnScreenHUD, 4000);
+        } else {
+            log("On-screen quiz completed or no open quiz questions found on page.");
+            updateStatus("Completed on-screen check.");
+            hideOnScreenHUD();
+        }
+        chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+    } catch(e) {
+        log(`Error in on-screen quiz solver: ${e.message}`);
+        updateStatus("Error in on-screen solver.");
+        hideOnScreenHUD();
+        chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+    }
+}
+
+async function solveQuizOnScreenInDOM(aiConfig, courseContext = null) {
+    try {
+        // 1. Check for "Start Attempt" / "Resume Attempt" buttons on intro page
+        const startButtons = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"]'));
+        const startKeywords = ['start attempt', 'resume attempt', 'start assignment', 'resume', 'try again', 'retake', 'take quiz', 'continue'];
+        let startBtn = null;
+        for (const btn of startButtons) {
+            const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+            const testId = (btn.getAttribute('data-testid') || btn.getAttribute('data-e2e') || '').toLowerCase();
+            if (startKeywords.some(kw => txt === kw || txt.includes(kw) || testId.includes(kw))) {
+                startBtn = btn;
+                break;
+            }
+        }
+
+        if (startBtn) {
+            log(`[On-Screen] Found "${startBtn.innerText || 'Start Attempt'}". Clicking to open quiz form...`);
+            showOnScreenHUD("Opening Quiz Form...", "working");
+            startBtn.click();
+            await new Promise(r => setTimeout(r, 1800));
+        }
+
+        // 2. Discover Question Containers in the DOM
+        let questionElements = Array.from(document.querySelectorAll('.rc-FormPart, [class*="FormPart"], [class*="QuizQuestion"], [class*="QuestionContainer"], fieldset, [data-testid*="question"]'));
+        
+        // Filter out elements with 0 inputs
+        questionElements = questionElements.filter(qEl => {
+            const hasInputs = qEl.querySelector('input, textarea, select, [contenteditable="true"]');
+            return !!hasInputs;
+        });
+
+        // Fallback: If no standard containers, group by fieldsets or question legends
+        if (questionElements.length === 0) {
+            questionElements = Array.from(document.querySelectorAll('fieldset, div[role="group"], div[role="region"]'));
+            questionElements = questionElements.filter(qEl => !!qEl.querySelector('input, textarea, select'));
+        }
+
+        if (questionElements.length === 0) {
+            log("[On-Screen] No active quiz question elements found in current DOM.");
+            return false;
+        }
+
+        log(`[On-Screen] Found ${questionElements.length} questions on page. Beginning live answering...`);
+        showOnScreenHUD(`Solving 1/${questionElements.length} Questions...`, "working");
+
+        for (let i = 0; i < questionElements.length; i++) {
+            if (globalState.abortRequested) {
+                log("[On-Screen] Solver stopped by user.");
+                break;
+            }
+
+            const qEl = questionElements[i];
+            qEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            qEl.style.outline = "2px solid #3b82f6";
+            qEl.style.borderRadius = "8px";
+            qEl.style.transition = "outline 0.3s ease";
+
+            showOnScreenHUD(`Solving Question ${i + 1} of ${questionElements.length}...`, "working");
+            updateProgress(i, questionElements.length, `Question ${i + 1}/${questionElements.length}`);
+
+            // Extract question prompt
+            const promptEl = qEl.querySelector('legend, [class*="prompt"], [class*="Prompt"], [class*="cml"], h3, h4, p');
+            const promptText = (promptEl ? promptEl.innerText : qEl.innerText || '').split('\n')[0].replace(/<[^>]*>/g, '').trim();
+
+            const radios = Array.from(qEl.querySelectorAll('input[type="radio"]'));
+            const checkboxes = Array.from(qEl.querySelectorAll('input[type="checkbox"]')).filter(cb => {
+                const labelTxt = (cb.closest('label')?.innerText || cb.parentElement?.innerText || '').toLowerCase();
+                return !labelTxt.includes('honor code') && !labelTxt.includes('submitting work') && !labelTxt.includes('i understand');
+            });
+            const textareas = Array.from(qEl.querySelectorAll('textarea, input[type="text"]:not([inputmode="numeric"]), [contenteditable="true"]')).filter(inp => {
+                const p = (inp.getAttribute('placeholder') || '').toLowerCase();
+                return !p.includes('signature') && !p.includes('name');
+            });
+            const numberInputs = Array.from(qEl.querySelectorAll('input[type="number"], input[inputmode="numeric"]'));
+
+            const courseHeader = courseContext?.courseTitle ? `Course: ${courseContext.courseTitle}\nAssignment: ${courseContext.assignmentName || 'Quiz'}\n` : '';
+
+            // Handle Multiple Choice (Radios)
+            if (radios.length > 0) {
+                const domOptions = radios.map((r, idx) => {
+                    const parentLabel = r.closest('label') || r.parentElement;
+                    const text = (parentLabel ? parentLabel.innerText : '').replace(/<[^>]*>/g, '').trim() || `Option ${idx + 1}`;
+                    return { id: `opt_${idx}`, element: r, text: text, parent: parentLabel };
+                });
+
+                const optionsList = domOptions.map((o, idx) => `Option ${idx + 1} (${String.fromCharCode(65 + idx)}): ${o.text}`).join('\n');
+                const prompt = `You are a student solving a multiple choice question in a Coursera course.
+
+${courseHeader}
+Question:
+${promptText}
+
+Options:
+${optionsList}
+
+Strict Safety & Style Guidelines:
+- Select the single best correct option based on this course's curriculum.
+- Reply ONLY with the correct option number(s) in this format: "Option 1".
+- Do not output anything else.`;
+
+                log(`[On-Screen Q${i + 1}] Asking AI for multiple choice...`);
+                const answer = await callLLM(prompt, aiConfig);
+                if (answer) {
+                    log(`[On-Screen Q${i + 1}] AI Answer: ${answer}`);
+                    const matched = matchGeminiAnswerToOptions(answer, domOptions);
+                    if (matched.length > 0) {
+                        const target = matched[0];
+                        clickNativeOption(target.element);
+                        if (target.parent) {
+                            target.parent.style.border = "2px solid #22c55e";
+                            target.parent.style.borderRadius = "6px";
+                            target.parent.style.padding = "4px";
+                        }
+                    }
+                }
+            }
+            // Handle Multiple Choice (Checkboxes)
+            else if (checkboxes.length > 0) {
+                const domOptions = checkboxes.map((cb, idx) => {
+                    const parentLabel = cb.closest('label') || cb.parentElement;
+                    const text = (parentLabel ? parentLabel.innerText : '').replace(/<[^>]*>/g, '').trim() || `Option ${idx + 1}`;
+                    return { id: `opt_${idx}`, element: cb, text: text, parent: parentLabel };
+                });
+
+                const optionsList = domOptions.map((o, idx) => `Option ${idx + 1} (${String.fromCharCode(65 + idx)}): ${o.text}`).join('\n');
+                const prompt = `You are a student solving a multi-select checkbox question in a Coursera course.
+
+${courseHeader}
+Question:
+${promptText}
+
+Options:
+${optionsList}
+
+Strict Safety & Style Guidelines:
+- Select all correct options based on this course.
+- Reply ONLY with the correct option number(s) in this format: "Option 1, Option 3".
+- Do not output anything else.`;
+
+                log(`[On-Screen Q${i + 1}] Asking AI for checkbox question...`);
+                const answer = await callLLM(prompt, aiConfig);
+                if (answer) {
+                    log(`[On-Screen Q${i + 1}] AI Answer: ${answer}`);
+                    const matched = matchGeminiAnswerToOptions(answer, domOptions);
+                    for (const target of matched) {
+                        if (!target.element.checked) {
+                            clickNativeOption(target.element);
+                        }
+                        if (target.parent) {
+                            target.parent.style.border = "2px solid #22c55e";
+                            target.parent.style.borderRadius = "6px";
+                            target.parent.style.padding = "4px";
+                        }
+                    }
+                }
+            }
+            // Handle Number Inputs
+            else if (numberInputs.length > 0) {
+                const numInput = numberInputs[0];
+                const prompt = `You are solving a numerical question in a Coursera course.
+
+${courseHeader}
+Question:
+${promptText}
+
+Provide ONLY the final calculated numeric value. Do not output words, units, or commentary.`;
+
+                const answer = await callLLM(prompt, aiConfig);
+                if (answer) {
+                    const numMatch = answer.match(/[-+]?[0-9]*\.?[0-9]+/);
+                    if (numMatch) {
+                        setNativeInputValue(numInput, numMatch[0]);
+                        numInput.style.border = "2px solid #22c55e";
+                    }
+                }
+            }
+            // Handle Textarea / Text Inputs
+            else if (textareas.length > 0) {
+                const textInput = textareas[0];
+                const prompt = `You are a top student writing an answer to an assignment question in a Coursera course.
+
+${courseHeader}
+Question:
+${promptText}
+
+Strict Safety & Style Guidelines:
+- Write a direct, concise, authentic human student answer strictly based on this course.
+- NEVER disclose, mention, or imply that you are an AI or automated system.
+- Do NOT include conversational greetings or quotes. Output ONLY the response text.`;
+
+                const answer = await callLLM(prompt, aiConfig);
+                if (answer) {
+                    const cleanAnswer = sanitizeHumanStudentResponse(answer);
+                    setNativeInputValue(textInput, cleanAnswer);
+                    textInput.style.border = "2px solid #22c55e";
+                }
+            }
+
+            qEl.style.outline = "2px solid #22c55e";
+            await new Promise(r => setTimeout(r, 400));
+        }
+
+        // 3. Honor Code & Academic Integrity Agreement Checkbox
+        showOnScreenHUD("Signing Honor Code...", "working");
+        const honorCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => {
+            const labelTxt = (cb.closest('label')?.innerText || cb.parentElement?.innerText || cb.getAttribute('aria-label') || '').toLowerCase();
+            return labelTxt.includes('honor code') || labelTxt.includes('submitting work') || labelTxt.includes('own work') || labelTxt.includes('i understand') || labelTxt.includes('academic integrity');
+        });
+
+        for (const hCb of honorCheckboxes) {
+            if (!hCb.checked) {
+                log("[On-Screen] Checking Coursera Honor Code agreement checkbox...");
+                clickNativeOption(hCb);
+            }
+        }
+
+        // Signature Text Field
+        const signatureInputs = Array.from(document.querySelectorAll('input[type="text"]')).filter(inp => {
+            const p = (inp.getAttribute('placeholder') || inp.getAttribute('aria-label') || inp.name || '').toLowerCase();
+            return p.includes('signature') || p.includes('full name') || p.includes('type your name');
+        });
+
+        for (const sInp of signatureInputs) {
+            if (!sInp.value) {
+                log("[On-Screen] Entering student signature...");
+                const cleanName = document.querySelector('[data-testid="user-profile-name"], .user-name')?.innerText || "Accepted";
+                setNativeInputValue(sInp, cleanName);
+            }
+        }
+
+        await new Promise(r => setTimeout(r, 600));
+
+        // 4. Locate and Click Submit Button
+        showOnScreenHUD("Submitting Assignment...", "working");
+        const allButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'));
+        const submitKeywords = ['submit assignment', 'submit quiz', 'submit exam', 'submit'];
+        
+        let submitBtn = null;
+        for (const btn of allButtons) {
+            const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+            const testId = (btn.getAttribute('data-testid') || btn.getAttribute('data-e2e') || '').toLowerCase();
+            if (submitKeywords.some(kw => txt === kw || testId.includes(kw))) {
+                submitBtn = btn;
+                break;
+            }
+        }
+
+        if (submitBtn) {
+            log(`[On-Screen] Found "${submitBtn.innerText || 'Submit'}" button. Submitting...`);
+            submitBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await new Promise(r => setTimeout(r, 500));
+            submitBtn.click();
+
+            // Wait for confirmation modal
+            await new Promise(r => setTimeout(r, 800));
+
+            // Check if confirmation modal appeared
+            const modalButtons = Array.from(document.querySelectorAll('[role="dialog"] button, .modal button, [class*="modal"] button, [class*="dialog"] button'));
+            for (const mBtn of modalButtons) {
+                const mText = (mBtn.innerText || mBtn.textContent || '').trim().toLowerCase();
+                if (mText === 'submit' || mText === 'yes' || mText === 'confirm' || mText === 'yes, submit' || mText.includes('submit assignment') || mText.includes('confirm')) {
+                    log(`[On-Screen] Confirmed final submit modal.`);
+                    mBtn.click();
+                    break;
+                }
+            }
+
+            return true;
+        } else {
+            log("[On-Screen] All questions answered! Please review and click Submit.");
+            return true;
+        }
+
+    } catch(e) {
+        log(`[On-Screen] Notice: ${e.message}`);
+        return false;
     }
 }
 

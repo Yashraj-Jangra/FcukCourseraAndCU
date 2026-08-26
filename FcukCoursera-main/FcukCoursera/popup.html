@@ -429,8 +429,11 @@
   </div>
 
   <!-- Action Grid -->
-  <div class="action-grid">
-    <button id="quizBtn" class="btn-action">⚡ Quizzes</button>
+  <div class="action-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 6px;">
+    <button id="quizOnScreenBtn" class="btn-action" style="background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd; font-weight: 700;">🎯 Solve on Screen</button>
+    <button id="quizBtn" class="btn-action">⚡ Auto Solve (All)</button>
+  </div>
+  <div class="action-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 12px;">
     <button id="startBtn" class="btn-action">▶ Videos</button>
     <button id="readBtn" class="btn-action">✓ Readings</button>
   </div>

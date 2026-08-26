@@ -2,6 +2,8 @@ function setRunningUIState(isRunning) {
     document.getElementById('startBtn').disabled = isRunning;
     document.getElementById('readBtn').disabled = isRunning;
     document.getElementById('quizBtn').disabled = isRunning;
+    const onScreenBtn = document.getElementById('quizOnScreenBtn');
+    if (onScreenBtn) onScreenBtn.disabled = isRunning;
     document.getElementById('completeBtn').disabled = isRunning;
     
     const stopBtn = document.getElementById('stopBtn');
@@ -379,6 +381,36 @@ document.getElementById('readBtn').addEventListener('click', async () => {
         });
     }
 })();
+
+document.getElementById('quizOnScreenBtn').addEventListener('click', async () => {
+    const config = getAIConfig();
+    if (!config.apiKey && config.provider !== 'custom') {
+        document.getElementById('status').innerText = `Enter ${config.provider} API Key first!`;
+        return;
+    }
+    saveSettings();
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+    if (!tab || !tab.url || !tab.url.includes("coursera.org")) {
+        document.getElementById('status').innerText = "Error: Not on Coursera!";
+        return;
+    }
+
+    setRunningUIState(true);
+    document.getElementById('status').innerText = "Solving Quiz on Screen...";
+
+    chrome.tabs.sendMessage(tab.id, { 
+        action: "start_onscreen_quiz_solver", 
+        apiKey: config.apiKey, 
+        aiConfig: config 
+    }, (response) => {
+        if (chrome.runtime.lastError) {
+            setRunningUIState(false);
+            document.getElementById('status').innerText = "Error: Refresh page & try again.";
+        }
+    });
+});
 
 document.getElementById('quizBtn').addEventListener('click', async () => {
     const config = getAIConfig();

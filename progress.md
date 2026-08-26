@@ -2,6 +2,11 @@
 
 ## Session Summary (2026-08-26)
 
+- ⚡ **Ultra-Fast Switching & Reduced Transition Latency (`content.js` & `background.js`)**:
+  - Slashed inter-item transition delays from 80ms–400ms down to 10ms–40ms for lightning-fast progression.
+  - Reduced on-screen app polling intervals from 450ms to 100ms and token hold time from 2000ms to 350ms.
+  - Accelerated auto-resume page initialization delay from 450ms down to 60ms.
+  - Reduced external lab tab closer duration in `background.js` from 3500ms to 1800ms.
 - 🌐 **Canonical URL Routing & 404 Recovery (`targetUrl` & `checkAndHandleAppPrepError`)**:
   - Eliminated invalid fabricated routes (`/singlePageApp/`, `/workspace/`, `/ungradedLab/`) that caused Coursera's *"Looks like you found a page that does not exist or the URL was mistyped"* 404 error page.
   - Restricted direct routes strictly to valid Coursera LTI paths (`/ungradedLti/`, `/gradedLti/`) and routed all other items to Coursera's universal canonical item path (`/home/item/:id`).

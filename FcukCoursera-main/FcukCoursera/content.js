@@ -628,7 +628,7 @@ async function processMasterCourseQueueStep() {
             if (!isCurrentPage) {
                 log(`[Master Runner] Navigating to App/Lab page: ${item.url}`);
                 showOnScreenHUD(`📱 Opening Lab (${currentIndex + 1}/${total}): ${item.name.substring(0, 25)}...`, "working");
-                await new Promise(r => setTimeout(r, 200));
+                await new Promise(r => setTimeout(r, 30));
                 window.location.href = item.url;
                 return;
             }
@@ -651,11 +651,11 @@ async function processMasterCourseQueueStep() {
                 
                 if (nextCategory === 'app_item' || isAppOrToolItem(nextItem)) {
                     log(`[Master Runner] Lab finished. Navigating to next item (Lab): ${nextItem.name}...`);
-                    await new Promise(r => setTimeout(r, 400));
+                    await new Promise(r => setTimeout(r, 40));
                     window.location.href = nextItem.url;
                 } else {
                     log(`[Master Runner] Lab finished. Continuing immediately to next item: ${nextItem.name}...`);
-                    await new Promise(r => setTimeout(r, 400));
+                    await new Promise(r => setTimeout(r, 20));
                     return processMasterCourseQueueStep();
                 }
             } else {
@@ -693,7 +693,7 @@ async function processMasterCourseQueueStep() {
         // Advance to next step in master queue
         const nextIndex = currentIndex + 1;
         await chrome.storage.local.set({ masterCourseIndex: nextIndex });
-        await new Promise(r => setTimeout(r, 80));
+        await new Promise(r => setTimeout(r, 10));
         return processMasterCourseQueueStep();
 
     } catch(e) {
@@ -1353,7 +1353,7 @@ async function completeUngradedAppItemInDOM() {
             }
 
             if (targetLaunchBtn) break;
-            await new Promise(r => setTimeout(r, 450));
+            await new Promise(r => setTimeout(r, 100));
         }
 
         if (targetLaunchBtn) {
@@ -1374,7 +1374,7 @@ async function completeUngradedAppItemInDOM() {
             targetLaunchBtn.classList.remove('cds-button-disabled', 'disabled');
 
             // Arm background auto-tab closer to automatically clean up the newly opened lab tab
-            chrome.runtime.sendMessage({ action: "arm_lab_tab_closer", durationMs: 12000 }).catch(() => {});
+            chrome.runtime.sendMessage({ action: "arm_lab_tab_closer", durationMs: 8000 }).catch(() => {});
 
             // 1. If wrapped inside a form, trigger form submission
             const form = targetLaunchBtn.closest('form');
@@ -1402,19 +1402,16 @@ async function completeUngradedAppItemInDOM() {
                     if (toolWin) {
                         setTimeout(() => {
                             try { toolWin.close(); } catch(e) {}
-                        }, 3500);
+                        }, 1800);
                     }
                 } catch(e) {}
             }
 
             actionTaken = true;
 
-            // 2. Keep session active for 2s so Coursera registers launch callback
-            log(`[App / Tool Solver] Keeping session active for token registration...`);
-            for (let sec = 2; sec > 0; sec--) {
-                showOnScreenHUD(`Registering App Tokens (${sec}s)...`, "working");
-                await new Promise(r => setTimeout(r, 1000));
-            }
+            // 2. Brief 350ms token handshake registration
+            showOnScreenHUD("Registering App Tokens...", "working");
+            await new Promise(r => setTimeout(r, 350));
         } else {
             log("[App / Tool Solver] No explicit launch button found. Scanning for embedded frame or completion triggers...");
         }
@@ -1435,7 +1432,7 @@ async function completeUngradedAppItemInDOM() {
                 log(`[App / Tool Solver] Found confirmation button "${fBtn.innerText || 'Mark as Completed'}". Clicking...`);
                 clickNativeElement(fBtn);
                 actionTaken = true;
-                await new Promise(r => setTimeout(r, 1000));
+                await new Promise(r => setTimeout(r, 150));
                 break;
             }
         }
@@ -1619,7 +1616,7 @@ async function processCurrentAppQueueStep() {
             showOnScreenHUD(`📱 Navigating to App (${currentIndex + 1}/${total}): ${item.name.substring(0, 30)}...`, "working");
             updateStatus(`Opening App ${currentIndex + 1}/${total}: ${item.name}...`);
             updateProgress(currentIndex, total, item.name);
-            await new Promise(r => setTimeout(r, 200));
+            await new Promise(r => setTimeout(r, 30));
             window.location.href = item.url;
             return;
         }
@@ -1633,8 +1630,8 @@ async function processCurrentAppQueueStep() {
         updateStatus(`Solving App (${currentIndex + 1}/${total}): ${item.name}...`);
         updateProgress(currentIndex, total, item.name);
         
-        // Quick 400ms wait for React Aria DOM to mount
-        await new Promise(r => setTimeout(r, 400));
+        // Quick 80ms wait for React Aria DOM to mount
+        await new Promise(r => setTimeout(r, 80));
 
         // 1. Live DOM solver (checks box, submits LTI form to launch app in new tab, holds 2s tokens, clicks finish)
         await completeUngradedAppItemInDOM();
@@ -1651,7 +1648,7 @@ async function processCurrentAppQueueStep() {
             log(`[App Navigator] Item ${currentIndex + 1}/${total} finished. Moving to next item: ${nextItem.name}...`);
             showOnScreenHUD(`✓ Done! Moving to Next App (${nextIndex + 1}/${total}): ${nextItem.name.substring(0, 25)}...`, "working");
             updateProgress(nextIndex, total, nextItem.name);
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise(r => setTimeout(r, 40));
             window.location.href = nextItem.url;
         } else {
             log(`\n🎉 [App Navigator] Successfully completed all ${total} App / Lab items!`);
@@ -5154,7 +5151,7 @@ Strict Safety & Style Guidelines:
             if (document.readyState !== 'complete') {
                 await new Promise(r => window.addEventListener('load', r, { once: true }));
             }
-            await new Promise(r => setTimeout(r, 450));
+            await new Promise(r => setTimeout(r, 60));
             await processMasterCourseQueueStep();
             return;
         }
@@ -5168,7 +5165,7 @@ Strict Safety & Style Guidelines:
             if (document.readyState !== 'complete') {
                 await new Promise(r => window.addEventListener('load', r, { once: true }));
             }
-            await new Promise(r => setTimeout(r, 450));
+            await new Promise(r => setTimeout(r, 60));
             await processCurrentAppQueueStep();
         }
     } catch(e) {

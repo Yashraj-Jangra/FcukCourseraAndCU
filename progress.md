@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 🚀 **Full Course Auto-Completer T&C & Auto-Submit Integration**:
+  - Integrated automatic Terms & Conditions / Honor Code agreement acceptance, signature filling, and final submission into the full course auto-completer (`startCompleteCourseProcess`) and batch quiz solver (`startQuizSolverProcess`).
+  - Strengthened Honor Code / T&C checkbox selector across all Coursera variations (including `terms of use`, `academic integrity`, `code of conduct`, `acknowledge`, `agree and submit`).
+  - Added multi-selector submit modal confirmation handling (`[role="dialog"]`, `[aria-modal="true"]`, `.cds-dialog`, `.modal`).
 - 🎯 **On-Screen Submission Mode Selector (Auto-Submit vs. Save as Draft)**:
   - Added an interactive modal prompt when clicking **🎯 Solve on Screen**:
     - **🚀 Answer & Auto-Submit**: Automatically answers all questions, accepts Coursera terms and conditions / honor code agreement checkbox, enters student signature, clicks Submit button, and confirms the final submission modal dialog.

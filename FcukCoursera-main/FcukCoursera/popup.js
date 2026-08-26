@@ -495,7 +495,7 @@ document.getElementById('completeBtn').addEventListener('click', async () => {
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Running Complete Course...";
+    document.getElementById('status').innerText = "Running Complete Course with T&C & Auto-Submit...";
 
     chrome.tabs.sendMessage(tab.id, { 
         action: "start_complete_course", 

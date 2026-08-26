@@ -209,7 +209,8 @@ async function startCompleteCourseProcess(aiConfig) {
     try {
         const { userId, courseId, courseSlug, courseTitle, allItems, modules } = await getCourseData();
         
-        log(`Starting Course Completion for "${courseTitle}". Found ${allItems.length} items across ${modules.length} modules.`);
+        log(`Starting Full Course Auto-Completion for "${courseTitle}". Found ${allItems.length} items across ${modules.length} modules.`);
+        log("[Full Course Solver] Auto-accepting Terms & Conditions, signing Honor Code, and performing final submission for all assessments.");
         updateProgress(0, allItems.length, "Starting...");
 
         let completedCount = 0;
@@ -1044,13 +1045,13 @@ async function processExamItem(userId, courseId, item, aiConfig, courseContext =
     try {
         log(`Processing Graded Exam / Assessment: ${item.name}...`);
         
-        // If the user currently has this specific exam page open in front of them, solve it on screen!
+        // If the user currently has this specific exam page open in front of them, solve it on screen with auto-submit & T&C acceptance!
         const isCurrentPage = window.location.href.includes(item.id);
         if (isCurrentPage) {
-            log(`[On-Screen Exam] User is currently on this exam page. Executing live on-screen solver...`);
-            const onScreenSuccess = await solveQuizOnScreenInDOM(aiConfig, courseContext);
+            log(`[On-Screen Exam] User is currently on this exam page. Executing live on-screen solver with T&C agreement and auto-submit...`);
+            const onScreenSuccess = await solveQuizOnScreenInDOM(aiConfig, courseContext, true);
             if (onScreenSuccess) {
-                log(`[On-Screen Exam] Completed and submitted on-screen.`);
+                log(`[On-Screen Exam] Completed, signed terms, and submitted on-screen.`);
                 return;
             }
         }
@@ -3509,26 +3510,31 @@ Strict Safety & Style Guidelines:
         showOnScreenHUD("Signing Honor Code & T&C...", "working");
         const honorCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => {
             const labelTxt = (cb.closest('label')?.innerText || cb.parentElement?.innerText || cb.getAttribute('aria-label') || '').toLowerCase();
-            return labelTxt.includes('honor code') || labelTxt.includes('submitting work') || labelTxt.includes('own work') || labelTxt.includes('i understand') || labelTxt.includes('academic integrity') || labelTxt.includes('terms and conditions') || labelTxt.includes('agreement');
+            const testId = (cb.getAttribute('data-testid') || cb.name || cb.id || '').toLowerCase();
+            return labelTxt.includes('honor code') || labelTxt.includes('submitting work') || labelTxt.includes('own work') 
+                || labelTxt.includes('i understand') || labelTxt.includes('academic integrity') || labelTxt.includes('terms and conditions') 
+                || labelTxt.includes('terms of use') || labelTxt.includes('terms') || labelTxt.includes('agreement') 
+                || labelTxt.includes('i agree') || labelTxt.includes('acknowledge') || labelTxt.includes('code of conduct')
+                || testId.includes('honor') || testId.includes('integrity') || testId.includes('agree');
         });
 
         for (const hCb of honorCheckboxes) {
             if (!hCb.checked) {
-                log("[On-Screen] Accepting Coursera Honor Code & Terms checkbox...");
+                log("[On-Screen] Accepting Coursera Honor Code, Terms & Conditions checkbox...");
                 clickNativeOption(hCb);
             }
         }
 
         // Signature Text Field
         const signatureInputs = Array.from(document.querySelectorAll('input[type="text"]')).filter(inp => {
-            const p = (inp.getAttribute('placeholder') || inp.getAttribute('aria-label') || inp.name || '').toLowerCase();
-            return p.includes('signature') || p.includes('full name') || p.includes('type your name');
+            const p = (inp.getAttribute('placeholder') || inp.getAttribute('aria-label') || inp.name || inp.id || '').toLowerCase();
+            return p.includes('signature') || p.includes('full name') || p.includes('type your name') || p.includes('your name');
         });
 
         for (const sInp of signatureInputs) {
             if (!sInp.value) {
                 log("[On-Screen] Entering student signature...");
-                const cleanName = document.querySelector('[data-testid="user-profile-name"], .user-name')?.innerText || "Accepted";
+                const cleanName = document.querySelector('[data-testid="user-profile-name"], .user-name, [class*="UserName"]')?.innerText || "Accepted";
                 setNativeInputValue(sInp, cleanName);
             }
         }
@@ -3538,13 +3544,13 @@ Strict Safety & Style Guidelines:
         // 4. Locate and Click Submit Button
         showOnScreenHUD("Submitting Assignment...", "working");
         const allButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'));
-        const submitKeywords = ['submit assignment', 'submit quiz', 'submit exam', 'submit'];
+        const submitKeywords = ['submit assignment', 'submit quiz', 'submit exam', 'submit', 'agree and submit', 'confirm and submit', 'review and submit'];
         
         let submitBtn = null;
         for (const btn of allButtons) {
             const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
             const testId = (btn.getAttribute('data-testid') || btn.getAttribute('data-e2e') || '').toLowerCase();
-            if (submitKeywords.some(kw => txt === kw || testId.includes(kw))) {
+            if (submitKeywords.some(kw => txt === kw || testId.includes(kw) || txt.includes(kw))) {
                 submitBtn = btn;
                 break;
             }
@@ -3559,12 +3565,13 @@ Strict Safety & Style Guidelines:
             // Wait for confirmation modal
             await new Promise(r => setTimeout(r, 800));
 
-            // Check if confirmation modal appeared
-            const modalButtons = Array.from(document.querySelectorAll('[role="dialog"] button, .modal button, [class*="modal"] button, [class*="dialog"] button'));
+            // Check if confirmation modal appeared (with multi-selector fallback)
+            const modalButtons = Array.from(document.querySelectorAll('[role="dialog"] button, [aria-modal="true"] button, .modal button, [class*="modal"] button, [class*="dialog"] button, [class*="Modal"] button'));
             for (const mBtn of modalButtons) {
                 const mText = (mBtn.innerText || mBtn.textContent || '').trim().toLowerCase();
-                if (mText === 'submit' || mText === 'yes' || mText === 'confirm' || mText === 'yes, submit' || mText.includes('submit assignment') || mText.includes('confirm')) {
-                    log(`[On-Screen] Confirmed final submit modal.`);
+                const mTestId = (mBtn.getAttribute('data-testid') || '').toLowerCase();
+                if (mText === 'submit' || mText === 'yes' || mText === 'confirm' || mText === 'yes, submit' || mText.includes('submit assignment') || mText.includes('confirm') || mTestId.includes('submit') || mTestId.includes('confirm')) {
+                    log(`[On-Screen] Confirmed final submit modal dialog.`);
                     mBtn.click();
                     break;
                 }

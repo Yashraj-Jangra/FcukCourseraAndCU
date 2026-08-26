@@ -2,6 +2,17 @@
 
 ## Session Summary (2026-08-26)
 
+- 📱 **Ungraded App & LTI Item Auto-Completer (`completeUngradedAppItem`)**:
+  - Implemented automated completion for `ungradedApp`, `gradedApp`, `app`, `singlePageApp`, `externalTool`, `openLearningApp`, `workspace`, `lab`, `ungradedLab`, `gradedLab`.
+  - Automatically checks third-party data / T&C consent checkboxes in DOM, clicks "Open Tool" / "Launch App" buttons, and keeps session active for 4s for auth token registration.
+  - Dispatches full API completion cascade across `onDemandAppCompletions.v1`, `onDemandLtiItemPasses.v1`, `onDemandWidgetPasses.v1`, `onDemandAssignmentPasses.v1`, `onDemandSupplementCompletions.v1`, `onDemandLtiLaunches.v1`.
+- ⚡ **Strict Progress Skipping (`fetchCourseProgressState`)**:
+  - Pre-queries Coursera's progress APIs (`onDemandCourseProgresses.v1`, `onDemandAssignmentPasses.v1`, `onDemandItemViews.v1`) before starting any solver or skipping run.
+  - Automatically skips all previously completed videos, readings, discussions, and already-passed quizzes (`[Already Completed (✓)]` / `[Already Passed (✓)]`), saving attempt quotas and accelerating runs.
+- ⚠️ **Graceful Locked Assessment & Manual Attention Engine**:
+  - Automatically detects locked assessments (`isLocked === true`, `lockStatus === 'LOCKED'`, prerequisite not met) and peer-review tasks (`peer`, `gradedPeerAssignment`).
+  - Catalogs them in a dedicated `manualAttentionItems` register with item names, modules, specific blockage reasons, and direct Coursera links.
+  - Displays a high-visibility **"⚠️ Items Requiring Your Manual Attention"** alert card in the popup summary report with direct links so users can complete prerequisites to unlock final assessments.
 - 🧠 **Historical Attempt Intelligence (Winning Answer Lock & Wrong Option Elimination)**:
   - Extracted past submission feedback from `queryState` (GraphQL) and on-screen DOM review markers (`.rc-FormPartCorrect` / `.rc-FormPartIncorrect`).
   - **Winning Answer Reuse**: Automatically locks and reuses 100% correct answers from previous attempts without risking re-answering.

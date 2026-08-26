@@ -207,16 +207,25 @@ let currentRawReportText = "";
 function renderSummaryReport(data) {
     if (!data) return;
 
-    const { courseTitle, totalItems, completedItems, percent, modules, categories, remainingItems } = data;
-    
+    const courseTitle = data.courseTitle || 'Course Summary';
+    const percent = data.percent || 0;
+    const totalItems = data.totalItems || 0;
+    const completedItems = data.completedItems || 0;
+    const modules = data.modules || [];
+    const categories = data.categories || null;
+    const remainingItems = data.remainingItems || [];
+    const manualAttentionItems = data.manualAttentionItems || [];
+
     let html = `
         <div class="report-card">
-            <div style="font-size: 12px; font-weight: 800; color: #f1f5f9; margin-bottom: 4px;">${courseTitle || 'Course Summary'}</div>
-            <div style="display: flex; justify-content: space-between; font-size: 10px; color: #94a3b8; margin-bottom: 6px;">
-                <span>Overall Completion</span>
-                <span style="font-weight: 700; color: ${percent >= 100 ? '#4ade80' : '#38bdf8'};">${percent}% (${completedItems}/${totalItems})</span>
+            <div class="report-header">
+                <div>
+                    <div style="font-size: 13px; font-weight: 700; color: #ffffff;">${courseTitle}</div>
+                    <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">Completed ${completedItems} of ${totalItems} items</div>
+                </div>
+                <div class="report-percent">${percent}%</div>
             </div>
-            <div style="background: rgba(255, 255, 255, 0.08); height: 6px; border-radius: 3px; overflow: hidden;">
+            <div style="background: #334155; border-radius: 9999px; height: 6px; overflow: hidden; margin-top: 8px;">
                 <div style="background: linear-gradient(90deg, #3b82f6, #10b981); height: 100%; width: ${percent}%;"></div>
             </div>
         </div>
@@ -242,6 +251,27 @@ function renderSummaryReport(data) {
 
     html += `</div>`;
 
+    if (manualAttentionItems && manualAttentionItems.length > 0) {
+        html += `
+            <div class="report-card" style="border-left: 3px solid #ef4444; background: rgba(239, 68, 68, 0.08);">
+                <div style="font-size: 11px; font-weight: 700; color: #f87171; margin-bottom: 4px;">⚠️ Attention Required (${manualAttentionItems.length})</div>
+                <div style="font-size: 9px; color: #fca5a5; margin-bottom: 8px; line-height: 1.4;">
+                    The following items are locked or require manual submission before final graded assessments can unlock:
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+        `;
+        manualAttentionItems.forEach(item => {
+            html += `
+                <div style="font-size: 9px; background: rgba(0, 0, 0, 0.35); padding: 6px; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.25);">
+                    <div style="font-weight: 700; color: #ffffff;">• [${item.moduleName || 'Module'}] ${item.name}</div>
+                    <div style="color: #cbd5e1; margin: 2px 0;">Reason: ${item.reason}</div>
+                    <a href="${item.itemUrl}" target="_blank" style="color: #38bdf8; text-decoration: underline; font-weight: 600;">🔗 Open in Coursera →</a>
+                </div>
+            `;
+        });
+        html += `</div></div>`;
+    }
+
     if (categories) {
         html += `
             <div class="report-card">
@@ -251,7 +281,7 @@ function renderSummaryReport(data) {
                     <div>📖 Readings: <b>${categories.readings || 0}</b></div>
                     <div>💬 Discussions: <b>${categories.discussions || 0}</b></div>
                     <div>🎭 Dialogues: <b>${categories.dialogues || 0}</b></div>
-                    <div>🧪 Labs & LTI: <b>${categories.labs || 0}</b></div>
+                    <div>🧪 Labs & Apps: <b>${categories.labs || 0}</b></div>
                     <div>📝 Quizzes: <b>${categories.quizzes || 0}</b></div>
                     <div>🎯 Graded: <b>${categories.graded || 0}</b></div>
                 </div>
@@ -285,6 +315,7 @@ function renderSummaryReport(data) {
 
     currentRawReportText = `=== COURSE COMPLETION REPORT ===\nCourse: ${courseTitle}\nProgress: ${percent}% (${completedItems}/${totalItems})\n\nMODULES:\n` +
         (modules || []).map(m => `- ${m.moduleName}: ${m.percent}% (${m.completedCount}/${m.totalCount})`).join('\n') +
+        (manualAttentionItems && manualAttentionItems.length > 0 ? `\n\n⚠️ MANUAL ATTENTION REQUIRED (${manualAttentionItems.length}):\n` + manualAttentionItems.map(m => `- [${m.moduleName}] ${m.name}: ${m.reason}\n  Link: ${m.itemUrl}`).join('\n') : '') +
         `\n\nREMAINING (${(remainingItems || []).length}):\n` +
         (remainingItems || []).map(r => `- [${r.moduleName}] ${r.name} (${r.typeName})`).join('\n');
 }

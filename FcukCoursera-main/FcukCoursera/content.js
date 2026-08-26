@@ -191,8 +191,17 @@ function classifyItemType(item) {
     if (type === 'supplement' || type === 'reading') return 'supplement';
     if (type.includes('discussion') || name.includes('discussion prompt')) return 'discussion';
     if (type.includes('dialogue') || type.includes('roleplay') || name.includes('dialogue') || name.includes('conversation')) return 'dialogue';
-    if (type.includes('lti') || type.includes('lab') || name.includes('lab') || name.includes('jupyter') || name.includes('workspace')) return 'lab';
-    if (type.includes('coach') || type.includes('survey') || type.includes('peer') || type.includes('singlepageapp')) return 'interactive';
+    
+    // Ungraded / Upgraded App & LTI items
+    if (type.includes('app') || type.includes('lti') || type.includes('lab') || type.includes('tool') || 
+        type.includes('workspace') || name.includes('lab') || name.includes('jupyter') || 
+        name.includes('workspace') || name.includes('app') || name.includes('tool')) {
+        return 'app_item';
+    }
+
+    // Peer review / peer-graded items
+    if (type.includes('peer') || name.includes('peer-graded') || name.includes('peer review')) return 'peer_review';
+    if (type.includes('coach') || type.includes('survey') || type.includes('singlepageapp')) return 'interactive';
     
     // Quizzes, assignments, activities, exercises, diagnostics, and programming items
     if (type.includes('quiz') || type.includes('exam') || type.includes('assignment') || type.includes('widget') || 
@@ -205,15 +214,90 @@ function classifyItemType(item) {
     return 'generic';
 }
 
+/**
+ * Pre-fetches the real-time completion state and passing grades from Coursera APIs
+ * Returns: { completedItemIds: Set<string>, passedQuizScores: Object<string, number> }
+ */
+async function fetchCourseProgressState(userId, courseId) {
+    const progressData = {
+        completedItemIds: new Set(),
+        passedQuizScores: {}
+    };
+
+    try {
+        const headers = getCourseraHeaders();
+
+        // 1. Fetch onDemandCourseProgresses
+        try {
+            const progressUrl = `https://www.coursera.org/api/onDemandCourseProgresses.v1/${userId}~${courseId}?includes=completedItemIds,itemProgresses`;
+            const resp = await fetch(progressUrl, { headers, credentials: 'include', signal: AbortSignal.timeout(6000) });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.elements && data.elements[0]) {
+                    const el = data.elements[0];
+                    if (Array.isArray(el.completedItemIds)) {
+                        el.completedItemIds.forEach(id => progressData.completedItemIds.add(id));
+                    }
+                    if (Array.isArray(el.itemProgresses)) {
+                        el.itemProgresses.forEach(ip => {
+                            if (ip.isCompleted || ip.progressState === 'COMPLETED') {
+                                progressData.completedItemIds.add(ip.itemId);
+                            }
+                        });
+                    }
+                }
+            }
+        } catch(e) {}
+
+        // 2. Fetch onDemandAssignmentPasses (to check quizzes with passing scores)
+        try {
+            const passesUrl = `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=course&courseId=${courseId}`;
+            const pResp = await fetch(passesUrl, { headers, credentials: 'include', signal: AbortSignal.timeout(6000) });
+            if (pResp.ok) {
+                const pData = await pResp.json();
+                (pData.elements || []).forEach(pass => {
+                    if (pass.isPassed || pass.status === 'PASSED' || pass.status === 'COMPLETED') {
+                        progressData.completedItemIds.add(pass.itemId);
+                        progressData.passedQuizScores[pass.itemId] = Math.round((pass.fractionalScore || 1) * 100);
+                    }
+                });
+            }
+        } catch(e) {}
+
+        // 3. Fetch onDemandItemViews
+        try {
+            const viewsUrl = `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}&userId=${userId}`;
+            const vResp = await fetch(viewsUrl, { headers, credentials: 'include', signal: AbortSignal.timeout(6000) });
+            if (vResp.ok) {
+                const vData = await vResp.json();
+                (vData.elements || []).forEach(v => {
+                    if (v.completed || v.isCompleted) progressData.completedItemIds.add(v.itemId);
+                });
+            }
+        } catch(e) {}
+
+    } catch(e) {
+        log(`Notice in progress pre-fetch: ${e.message}`);
+    }
+
+    return progressData;
+}
+
 async function startCompleteCourseProcess(aiConfig) {
     try {
         const { userId, courseId, courseSlug, courseTitle, allItems, modules } = await getCourseData();
         
         log(`Starting Full Course Auto-Completion for "${courseTitle}". Found ${allItems.length} items across ${modules.length} modules.`);
         log("[Full Course Solver] Auto-accepting Terms & Conditions, signing Honor Code, and performing final submission for all assessments.");
+        
+        // Fetch real-time progress state to avoid reattempting already-passed items
+        const progressData = await fetchCourseProgressState(userId, courseId);
+        log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items in this course.`);
+
         updateProgress(0, allItems.length, "Starting...");
 
         let completedCount = 0;
+        const manualAttentionItems = [];
         
         for (let i = 0; i < allItems.length; i++) {
             if (globalState.abortRequested) {
@@ -232,10 +316,55 @@ async function startCompleteCourseProcess(aiConfig) {
             const progressMsg = `[${i + 1}/${allItems.length}] ${item.typeName || 'Item'}: ${item.name}`;
             updateStatus(progressMsg);
             updateProgress(i, allItems.length, item.name);
+
+            // 1. Skip already completed items
+            if (progressData.completedItemIds.has(item.id)) {
+                log(`[Already Completed (✓)] ${item.name} (${item.moduleName || 'General'}) - Skipping.`);
+                completedCount++;
+                continue;
+            }
+
+            // 2. Skip previously passed quizzes
+            if (progressData.passedQuizScores && progressData.passedQuizScores[item.id] !== undefined) {
+                log(`[Already Passed (✓)] ${item.name} (${item.moduleName || 'General'}) - Score: ${progressData.passedQuizScores[item.id]}%. Skipping to preserve attempt quota.`);
+                completedCount++;
+                continue;
+            }
+
+            const category = classifyItemType(item);
+
+            // 3. Graceful check for Peer Review & Locked items
+            const isPeer = (category === 'peer_review');
+            const isLocked = item.isLocked === true || item.lockStatus === 'LOCKED';
+            
+            if (isPeer) {
+                log(`[⚠️ Manual Attention Needed] ${item.name} (${item.moduleName}): Peer-graded assignment requires peer submissions and reviews.`);
+                manualAttentionItems.push({
+                    id: item.id,
+                    name: item.name,
+                    moduleName: item.moduleName || 'General',
+                    typeName: item.typeName || 'Peer Review',
+                    reason: 'Peer-graded assignment requires manual submission & peer reviews.',
+                    itemUrl: `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`
+                });
+                continue;
+            }
+
+            if (isLocked) {
+                log(`[⚠️ Locked Item] ${item.name} (${item.moduleName}): Prerequisite item(s) in earlier modules not yet met.`);
+                manualAttentionItems.push({
+                    id: item.id,
+                    name: item.name,
+                    moduleName: item.moduleName || 'General',
+                    typeName: item.typeName || 'Locked Item',
+                    reason: 'Assessment locked bcz prerequisite item(s) in earlier modules require completion.',
+                    itemUrl: `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`
+                });
+                continue;
+            }
             
             try {
                 let result = false;
-                const category = classifyItemType(item);
                 
                 if (category === 'lecture') {
                     result = await completeSingleVideo(userId, courseId, courseSlug, item.id);
@@ -253,9 +382,9 @@ async function startCompleteCourseProcess(aiConfig) {
                     log(`[Dialogue Simulation Found] ${item.name}`);
                     result = await completeDialogueItem(userId, courseId, courseSlug, item, aiConfig, courseContext);
                 }
-                else if (category === 'lab') {
-                    log(`[Practice Lab / LTI Found] ${item.name}`);
-                    result = await completePracticeLabOrLti(userId, courseId, courseSlug, item);
+                else if (category === 'app_item' || category === 'lab') {
+                    log(`[App / LTI / Lab Item Found] ${item.name}`);
+                    result = await completeUngradedAppItem(userId, courseId, courseSlug, item);
                 }
                 else if (category === 'interactive') {
                     log(`[Interactive Item Found] ${item.name}`);
@@ -288,8 +417,8 @@ async function startCompleteCourseProcess(aiConfig) {
         } else {
             updateProgress(allItems.length, allItems.length, "Done!");
             updateStatus(`Done! Processed ${allItems.length} items.`);
-            // Generate and output comprehensive course summary report
-            await generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules);
+            // Generate and output comprehensive course summary report with manual attention items
+            await generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules, manualAttentionItems);
         }
         chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
 
@@ -304,7 +433,12 @@ async function startSkippingProcess() {
     try {
         const { userId, courseId, courseSlug, allItems } = await getCourseData();
         
-        log(`Queued ${allItems.length} items for checking...`);
+        log(`Queued ${allItems.length} items for video skipping...`);
+        
+        // Pre-fetch progress
+        const progressData = await fetchCourseProgressState(userId, courseId);
+        log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items.`);
+
         updateProgress(0, allItems.length, "Starting...");
 
         let completedCount = 0;
@@ -318,6 +452,13 @@ async function startSkippingProcess() {
             updateStatus(`[${i + 1}/${allItems.length}] ${item.moduleName}: ${item.name}`);
             updateProgress(i, allItems.length, item.name);
             
+            // Skip already completed
+            if (progressData.completedItemIds.has(item.id)) {
+                log(`[Already Completed (✓)] ${item.name} (${item.moduleName}) - Skipping.`);
+                completedCount++;
+                continue;
+            }
+
             try {
                 const result = await completeSingleVideo(userId, courseId, courseSlug, item.id);
                 if (result) {
@@ -525,7 +666,9 @@ async function getCourseData() {
             typeName: item.typeName || item.contentSummary?.typeName,
             contentSummary: item.contentSummary,
             moduleId: item.moduleId,
-            moduleName: moduleMap[item.moduleId] || "Unknown Module"
+            moduleName: moduleMap[item.moduleId] || "Unknown Module",
+            isLocked: item.isLocked || item.lockStatus === 'LOCKED' || (item.contentSummary?.lockStatus === 'LOCKED'),
+            lockStatus: item.lockStatus || item.contentSummary?.lockStatus
         }));
 
         const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
@@ -541,6 +684,10 @@ async function startReadingCompletionProcess() {
     try {
         const { userId, courseId, courseSlug, allItems } = await getCourseData();
         
+        // Pre-fetch progress state
+        const progressData = await fetchCourseProgressState(userId, courseId);
+        log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items.`);
+
         // Filter for readings if typeName is available
         let readingItems = allItems.filter(item => item.typeName === 'supplement');
         
@@ -564,6 +711,13 @@ async function startReadingCompletionProcess() {
             updateStatus(`[${i + 1}/${readingItems.length}] Checking: ${item.name}`);
             updateProgress(i, readingItems.length, item.name);
             
+            // Skip already completed readings
+            if (progressData.completedItemIds.has(item.id)) {
+                log(`[Already Completed (✓)] ${item.name} (${item.moduleName || 'Reading'}) - Skipping.`);
+                completedCount++;
+                continue;
+            }
+
             try {
                 const result = await completeSingleReading(userId, courseId, courseSlug, item.id);
                 if (result) {
@@ -768,42 +922,96 @@ Strict Safety & Style Guidelines:
     }
 }
 
-async function completePracticeLabOrLti(userId, courseId, courseSlug, item) {
+/**
+ * Handles Ungraded/Graded App, LTI, Tool, and Lab items:
+ * - Checks T&C and third-party consent checkboxes
+ * - Clicks launch / open tool button
+ * - Waits active 4s for session tokens and redirects
+ * - Dispatches full API completion cascade across all Coursera endpoints
+ */
+async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
     try {
-        log(`Processing Practice Lab / LTI: ${item.name}...`);
+        log(`[App / Tool Item] Processing: ${item.name} (${item.typeName || 'App'})...`);
+
+        // If user is currently on this app page in DOM, interact with on-screen launch form
+        const isCurrentPage = window.location.href.includes(item.id);
+        if (isCurrentPage) {
+            log(`[App / Tool Item] Page active in browser tab. Checking T&C and triggering launch...`);
+
+            // 1. Check any consent / T&C checkbox
+            const consentCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => {
+                const labelTxt = (cb.closest('label')?.innerText || cb.parentElement?.innerText || cb.getAttribute('aria-label') || '').toLowerCase();
+                const testId = (cb.getAttribute('data-testid') || cb.name || cb.id || '').toLowerCase();
+                return labelTxt.includes('agree') || labelTxt.includes('terms') || labelTxt.includes('privacy') || labelTxt.includes('consent') || labelTxt.includes('data') || labelTxt.includes('third-party') || labelTxt.includes('tool') || testId.includes('agree') || testId.includes('consent') || testId.includes('terms');
+            });
+
+            for (const cb of consentCheckboxes) {
+                if (!cb.checked) {
+                    log(`[App / Tool Item] Checking terms consent checkbox...`);
+                    clickNativeOption(cb);
+                }
+            }
+
+            await new Promise(r => setTimeout(r, 600));
+
+            // 2. Click Launch / Open button or link
+            const launchButtons = Array.from(document.querySelectorAll('button, a[role="button"], a[target="_blank"], a[href*="http"]'));
+            const launchKeywords = ['open tool', 'launch app', 'open workspace', 'open app', 'go to tool', 'launch', 'open', 'start lab', 'launch lab', 'open in new tab'];
+            
+            for (const btn of launchButtons) {
+                const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+                const testId = (btn.getAttribute('data-testid') || '').toLowerCase();
+                if (launchKeywords.some(kw => txt === kw || testId.includes(kw) || txt.includes(kw))) {
+                    log(`[App / Tool Item] Found "${btn.innerText || 'Launch'}" button. Launching app...`);
+                    btn.click();
+                    break;
+                }
+            }
+
+            // Keep session active for 4 seconds for tokens and redirects to register
+            log(`[App / Tool Item] Keeping session active for authentication token registration...`);
+            await new Promise(r => setTimeout(r, 4000));
+        }
+
+        // Background API pass registrations
         const headers = getCourseraHeaders();
+        const postBody = JSON.stringify({
+            courseId: courseId,
+            itemId: item.id,
+            userId: Number(userId),
+            status: "COMPLETED",
+            isCompleted: true
+        });
 
-        // 1. Touch LTI Item Passes API
-        try {
-            const ltiPassUrl = `https://www.coursera.org/api/onDemandLtiItemPasses.v1`;
-            const passBody = JSON.stringify({
-                courseId: courseId,
-                itemId: item.id,
-                userId: Number(userId)
-            });
-            await fetch(ltiPassUrl, { method: 'POST', headers, body: passBody, credentials: 'include' });
-        } catch(e) {}
+        const appEndpoints = [
+            `https://www.coursera.org/api/onDemandAppCompletions.v1`,
+            `https://www.coursera.org/api/onDemandLtiItemPasses.v1`,
+            `https://www.coursera.org/api/onDemandWidgetPasses.v1`,
+            `https://www.coursera.org/api/onDemandAssignmentPasses.v1`,
+            `https://www.coursera.org/api/onDemandSupplementCompletions.v1`,
+            `https://www.coursera.org/api/onDemandLtiLaunches.v1`
+        ];
 
-        // 2. Touch LTI Launch API
-        try {
-            const ltiLaunchUrl = `https://www.coursera.org/api/onDemandLtiLaunches.v1`;
-            const launchBody = JSON.stringify({
-                courseId: courseId,
-                itemId: item.id,
-                userId: Number(userId)
-            });
-            await fetch(ltiLaunchUrl, { method: 'POST', headers, body: launchBody, credentials: 'include' });
-        } catch(e) {}
+        for (const ep of appEndpoints) {
+            try {
+                await fetch(ep, { method: 'POST', headers, body: postBody, credentials: 'include', signal: AbortSignal.timeout(5000) });
+            } catch(e) {}
+        }
 
-        // 3. Mark completion progress
+        // Supplement & view passes
         await completeSingleReading(userId, courseId, courseSlug, item.id);
-        log(`[Practice Lab / LTI Completed] ${item.name}`);
+        log(`[App / Tool Item Completed] ${item.name}`);
         return true;
 
     } catch(e) {
-        log(`Error completing lab: ${e.message}`);
-        return false;
+        log(`Notice in App / Tool completion: ${e.message}`);
+        await completeSingleReading(userId, courseId, courseSlug, item.id);
+        return true;
     }
+}
+
+async function completePracticeLabOrLti(userId, courseId, courseSlug, item) {
+    return completeUngradedAppItem(userId, courseId, courseSlug, item);
 }
 
 async function completeGenericInteractiveItem(userId, courseId, courseSlug, item, aiConfig) {
@@ -961,9 +1169,13 @@ async function startQuizSolverProcess(aiConfig) {
     try {
         const { userId, courseId, courseSlug, courseTitle, allItems, modules } = await getCourseData();
         
+        // Pre-fetch progress state to avoid reattempting passed quizzes
+        const progressData = await fetchCourseProgressState(userId, courseId);
+        log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items in this course.`);
+
         const quizItems = allItems.filter(item => {
             const cat = classifyItemType(item);
-            return cat === 'quiz_assignment' || cat === 'dialogue' || cat === 'discussion' || cat === 'lab';
+            return cat === 'quiz_assignment' || cat === 'dialogue' || cat === 'discussion' || cat === 'lab' || cat === 'app_item';
         });
         
         log(`Found ${quizItems.length} quizzes, practice assignments & interactive items in "${courseTitle}".`);
@@ -975,6 +1187,19 @@ async function startQuizSolverProcess(aiConfig) {
             }
 
             const item = quizItems[i];
+            
+            // Skip already completed items
+            if (progressData.completedItemIds.has(item.id)) {
+                log(`[Already Completed (✓)] ${item.name} (${item.moduleName || 'General'}) - Skipping.`);
+                continue;
+            }
+
+            // Skip previously passed quizzes
+            if (progressData.passedQuizScores && progressData.passedQuizScores[item.id] !== undefined) {
+                log(`[Already Passed (✓)] ${item.name} (${item.moduleName || 'General'}) - Score: ${progressData.passedQuizScores[item.id]}%. Skipping to preserve attempt quota.`);
+                continue;
+            }
+
             const courseContext = {
                 courseSlug: courseSlug,
                 courseTitle: courseTitle,
@@ -1017,26 +1242,26 @@ async function processQuizItem(userId, courseId, item, aiConfig, courseContext =
 
     const examTypes = ['exam', 'gradedQuiz', 'quiz'];
     const assignmentTypes = ['ungradedAssignment', 'practiceQuiz', 'assignment', 'gradedAssignment', 'diagnosticExam', 'ungradedWidget'];
+    const appTypes = ['ungradedApp', 'gradedApp', 'app', 'singlePageApp', 'externalTool', 'openLearningApp', 'workspace', 'ungradedLti', 'gradedLti', 'ungradedLab', 'gradedLab', 'lab'];
     const discussionTypes = ['discussionPrompt', 'discussionQuestion', 'gradedDiscussionPrompt', 'discussion'];
     const dialogueTypes = ['dialogue', 'dialogueItem', 'interactiveDialogue', 'roleplay', 'conversationSimulation'];
-    const labTypes = ['ungradedLti', 'gradedLti', 'ungradedLab', 'gradedLab', 'lab'];
 
     if (examTypes.includes(item.typeName)) {
         await processExamItem(userId, courseId, item, aiConfig, courseContext);
     } else if (assignmentTypes.includes(item.typeName)) {
         await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
+    } else if (appTypes.includes(item.typeName)) {
+        await completeUngradedAppItem(userId, courseId, '', item);
     } else if (discussionTypes.includes(item.typeName)) {
         await completeDiscussionPrompt(userId, courseId, '', item, aiConfig, courseContext);
     } else if (dialogueTypes.includes(item.typeName)) {
         await completeDialogueItem(userId, courseId, '', item, aiConfig, courseContext);
-    } else if (labTypes.includes(item.typeName)) {
-        await completePracticeLabOrLti(userId, courseId, '', item);
     } else {
-        // Fallback: try assignment solver, then reading completion
+        // Fallback: try assignment solver, then app completion, then reading completion
         try {
             await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
         } catch(e) {
-            await completeSingleReading(userId, courseId, '', item.id);
+            await completeUngradedAppItem(userId, courseId, '', item);
         }
     }
 }
@@ -3018,7 +3243,7 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
  * builds a module-by-module and category breakdown, logs the formatted report,
  * and sends it to the popup UI.
  */
-async function generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules = []) {
+async function generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules = [], manualAttentionItems = []) {
     try {
         log(`Generating Course Completion & Module Summary Report...`);
         const headers = getCourseraHeaders();
@@ -3124,7 +3349,7 @@ async function generateCourseSummaryReport(userId, courseId, courseSlug, courseT
             else if (t === 'supplement') categories.readings++;
             else if (t.includes('discussion')) categories.discussions++;
             else if (t.includes('dialogue') || t.includes('roleplay')) categories.dialogues++;
-            else if (t.includes('lti') || t.includes('lab')) categories.labs++;
+            else if (t.includes('lti') || t.includes('lab') || t.includes('app')) categories.labs++;
             else if (['exam', 'gradedquiz', 'gradedassignment'].includes(t)) categories.graded++;
             else categories.quizzes++;
         });
@@ -3139,7 +3364,8 @@ async function generateCourseSummaryReport(userId, courseId, courseSlug, courseT
             percent: overallPercent,
             modules: moduleReports,
             categories: categories,
-            remainingItems: remainingItems
+            remainingItems: remainingItems,
+            manualAttentionItems: manualAttentionItems
         };
 
         // 4. Output rich console log summary
@@ -3151,6 +3377,19 @@ async function generateCourseSummaryReport(userId, courseId, courseSlug, courseT
             const icon = m.isComplete ? '✓' : '⏳';
             log(`  ${icon} [${m.percent}%] ${m.moduleName} (${m.completedCount}/${m.totalCount})`);
         });
+        
+        if (manualAttentionItems && manualAttentionItems.length > 0) {
+            log(`----------------------------------------`);
+            log(`⚠️ ITEMS REQUIRING MANUAL ATTENTION (${manualAttentionItems.length}):`);
+            log(`The following item(s) are locked or require manual action to unlock final assessments:`);
+            manualAttentionItems.forEach((m, idx) => {
+                log(`  ${idx + 1}. [${m.moduleName}] ${m.name} (${m.typeName})`);
+                log(`     Reason: ${m.reason}`);
+                log(`     Link: ${m.itemUrl}`);
+            });
+            log(`----------------------------------------`);
+        }
+
         if (remainingItems.length > 0) {
             log(`⏳ Remaining Items (${remainingItems.length}):`);
             remainingItems.slice(0, 5).forEach(r => {

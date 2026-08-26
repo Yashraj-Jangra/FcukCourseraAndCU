@@ -346,32 +346,35 @@ document.getElementById('readBtn').addEventListener('click', async () => {
     });
 });
 
-// Check for running process on load
+// Check for running process or existing state on load
 (async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.url && tab.url.includes("coursera.org")) {
         chrome.tabs.sendMessage(tab.id, { action: "get_status" }, (response) => {
-            if (chrome.runtime.lastError) return;
+            if (chrome.runtime.lastError || !response) return;
             
-            if (response && response.isRunning) {
-                setRunningUIState(true);
+            if (response.statusMessage && response.statusMessage !== "Ready") {
                 document.getElementById('status').innerText = response.statusMessage;
-                
+            }
+            
+            if (response.logs && response.logs.length > 0) {
                 logContainer.innerHTML = '';
-                if (response.logs && response.logs.length > 0) {
-                    response.logs.forEach(msg => {
-                        appendLog(msg);
-                    });
-                }
+                response.logs.forEach(msg => {
+                    appendLog(msg);
+                });
+            }
 
-                if (response.progress && response.progress.total > 0) {
-                    const { current, total, message } = response.progress;
-                    const percentage = Math.round((current / total) * 100);
-                    document.getElementById('progressContainer').style.display = 'block';
-                    document.getElementById('progressBar').style.width = percentage + '%';
-                    document.getElementById('progressText').innerText = `${percentage}%`;
-                    document.getElementById('progressStep').innerText = message;
-                }
+            if (response.progress && response.progress.total > 0) {
+                const { current, total, message } = response.progress;
+                const percentage = Math.round((current / total) * 100);
+                document.getElementById('progressContainer').style.display = 'block';
+                document.getElementById('progressBar').style.width = percentage + '%';
+                document.getElementById('progressText').innerText = `${percentage}%`;
+                document.getElementById('progressStep').innerText = message;
+            }
+
+            if (response.isRunning) {
+                setRunningUIState(true);
             }
         });
     }
@@ -410,7 +413,7 @@ document.getElementById('quizBtn').addEventListener('click', async () => {
 document.getElementById('completeBtn').addEventListener('click', async () => {
     const config = getAIConfig();
     if (!config.apiKey && config.provider !== 'custom') {
-        alert(`Please enter a ${config.provider} API Key first.`);
+        document.getElementById('status').innerText = `Enter ${config.provider} API Key first!`;
         return;
     }
     

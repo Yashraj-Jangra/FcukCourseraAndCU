@@ -1,5 +1,34 @@
 # FcukCoursera - Development Progress & Status Tracker
 
+## Session Summary (2026-08-26)
+
+### What Work Has Been Done:
+- 🛡️ **Universal Host Permissions in `manifest.json`**:
+  - Expanded `host_permissions` to include `<all_urls>`, enabling unrestricted cross-origin API calls to any user-configured local or remote AI endpoint (e.g. Ollama on port `11434`, LM Studio on port `1234`, DeepSeek, OpenAI, vLLM, custom reverse proxies).
+- 🧩 **All-Inclusive Question Type Solver**:
+  - Expanded `solveQuestions` in `content.js` to natively handle all Coursera question types without falling into empty MCQ fallbacks:
+    - `Submission_CodeExpressionQuestion`: Generates raw working source code in the course's target programming language.
+    - `Submission_RichTextQuestion`: Submits formatted CML paragraphs for open-ended rich text answers.
+    - `Submission_RegexQuestion`: Submits exact pattern matching and regular expression answers.
+    - `Submission_UrlQuestion` / `Submission_FileUploadQuestion`: Submits valid project URLs and completion metadata.
+    - `Submission_WidgetQuestion`: Directly marks interactive widgets as completed.
+    - `Submission_MultipleChoiceQuestion` & `Submission_CheckboxQuestion`: High-precision multi-mode matching.
+- 🎯 **Ranked Fuzzy Option Matcher (`matchGeminiAnswerToOptions`)**:
+  - Enhanced option matching with token overlap scoring, normalized string comparisons, and exact keyword matches to eliminate false positives and ensure 100% option selection accuracy.
+- 🧹 **Cleaned Duplicate Function Declarations**:
+  - Removed duplicate declarations of `processExamItem`, consolidating into a single error-handled assessment solver.
+- 🔑 **Centralized CSRF & Header Factory (`getCourseraHeaders` / `getCsrfToken`)**:
+  - Unified token extraction with URI decoding and case-insensitive cookie pattern matching, standardizing request headers across all video, reading, quiz, discussion, dialogue, and progress endpoints.
+- 🌐 **Multi-Pattern Course Slug & Identity Resolution**:
+  - Enhanced `getCourseData()` to resolve course slugs across `/learn/`, `/teach/`, and `/course/` URL structures.
+  - Added resilient fallback cascades for `userId` (`adminUserPermissions.v1`, `userPreferences.v1`, `externalAuthUserData.v1`) and `courseId` (`onDemandCourseMaterials.v2`, `onDemandCourses.v1`).
+- 📊 **Guaranteed Summary Report & Historical Log Persistence**:
+  - `generateCourseSummaryReport` now writes directly to `chrome.storage.local.set({ latestSummaryReport })`.
+  - Popup UI on load now restores historical logs, progress percentages, and last completion status from `globalState` even if the process has finished and the popup is reopened.
+  - Replaced blocking browser `alert()` on `completeBtn` with in-popup status warning notifications.
+
+---
+
 ## Session Summary (2026-08-21)
 
 ### What Work Has Been Done:

@@ -68,6 +68,26 @@ function updateProgress(current, total, message) {
     }).catch(() => {});
 }
 
+// Coursera CSRF & Request Header Helpers
+function getCsrfToken() {
+    const match = document.cookie.match(/(?:CSRF3-Token|csrf3-token|CSRF-Token)=([^;]+)/i);
+    return match ? decodeURIComponent(match[1].trim()) : null;
+}
+
+function getCourseraHeaders(extra = {}) {
+    const token = getCsrfToken();
+    const headers = {
+        'Content-Type': 'application/json',
+        'x-coursera-application': 'ondemand',
+        'x-requested-with': 'XMLHttpRequest',
+        ...extra
+    };
+    if (token) {
+        headers['x-csrf3-token'] = token;
+    }
+    return headers;
+}
+
 // Main Logic
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "get_status") {
@@ -345,16 +365,7 @@ async function completeSingleVideo(userId, courseId, courseSlug, itemId) {
     // B. Execute Completion Sequence
     const apiUrlBase = `https://www.coursera.org/api/opencourse.v1/user/${userId}/course/${courseSlug}/item/${itemId}/lecture/videoEvents/`;
     const progressUrl = `https://www.coursera.org/api/onDemandVideoProgresses.v1/${userId}~${courseId}~${trackingId}`;
-
-    const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
-    const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
-    
-    const headers = {
-        'Content-Type': 'application/json',
-        'x-csrf3-token': csrfToken,
-        'x-coursera-application': 'ondemand',
-        'x-requested-with': 'XMLHttpRequest',
-    };
+    const headers = getCourseraHeaders();
     const payload = JSON.stringify({ contentRequestBody: {} });
 
     // 1. Play
@@ -391,29 +402,70 @@ async function getCourseData() {
     
     // 1. Get Course Slug from URL
     const urlParts = window.location.pathname.split('/').filter(p => p);
+    let courseSlug = null;
+    
     const learnIndex = urlParts.indexOf('learn');
-    if (learnIndex === -1 || urlParts.length <= learnIndex + 1) {
-        throw new Error("Could not find course slug in URL. Go to course home.");
+    if (learnIndex !== -1 && urlParts.length > learnIndex + 1) {
+        courseSlug = urlParts[learnIndex + 1];
+    } else {
+        const teachIndex = urlParts.indexOf('teach');
+        if (teachIndex !== -1 && urlParts.length > teachIndex + 1) {
+            courseSlug = urlParts[teachIndex + 1];
+        } else {
+            const courseIndex = urlParts.indexOf('course');
+            if (courseIndex !== -1 && urlParts.length > courseIndex + 1) {
+                courseSlug = urlParts[courseIndex + 1];
+            }
+        }
     }
-    const courseSlug = urlParts[learnIndex + 1];
+
+    if (!courseSlug) {
+        throw new Error("Could not find course slug in URL. Please open a Coursera course page (e.g. /learn/course-name).");
+    }
     log(`Course Slug: ${courseSlug}`);
 
-    // 2. Get User ID and Course ID
-    let userId, courseId;
-    try {
-        const userResp = await fetch("https://www.coursera.org/api/adminUserPermissions.v1?q=my", {credentials: "include"});
-        const userData = await userResp.json();
-        userId = userData.elements?.[0]?.id;
+    // 2. Get User ID and Course ID with multi-endpoint fallbacks
+    let userId = null, courseId = null;
+    
+    // Fallback cascade for User ID
+    const userEndpoints = [
+        "https://www.coursera.org/api/adminUserPermissions.v1?q=my",
+        "https://www.coursera.org/api/userPreferences.v1?q=my",
+        "https://www.coursera.org/api/externalAuthUserData.v1?q=my"
+    ];
 
-        const courseResp = await fetch(`https://www.coursera.org/api/onDemandCourseMaterials.v2/?q=slug&slug=${courseSlug}&includes=tracks`, {credentials: "include"});
-        const courseData = await courseResp.json();
-        courseId = courseData.elements?.[0]?.id;
-        
-        if (!userId || !courseId) throw new Error("Missing IDs");
-        log(`User ID: ${userId}, Course ID: ${courseId}`);
-    } catch (e) {
-        throw new Error("Error fetching User/Course IDs: " + e.message);
+    for (const uUrl of userEndpoints) {
+        try {
+            const userResp = await fetch(uUrl, { credentials: "include" });
+            if (userResp.ok) {
+                const userData = await userResp.json();
+                userId = userData.elements?.[0]?.id || userData.elements?.[0]?.userId;
+                if (userId) break;
+            }
+        } catch(e) {}
     }
+
+    // Fallback cascade for Course ID
+    const courseEndpoints = [
+        `https://www.coursera.org/api/onDemandCourseMaterials.v2/?q=slug&slug=${courseSlug}&includes=tracks`,
+        `https://www.coursera.org/api/onDemandCourses.v1?q=slug&slug=${courseSlug}`
+    ];
+
+    for (const cUrl of courseEndpoints) {
+        try {
+            const courseResp = await fetch(cUrl, { credentials: "include" });
+            if (courseResp.ok) {
+                const courseData = await courseResp.json();
+                courseId = courseData.elements?.[0]?.id;
+                if (courseId) break;
+            }
+        } catch(e) {}
+    }
+
+    if (!userId || !courseId) {
+        throw new Error(`Could not resolve User/Course IDs (User: ${userId || 'Missing'}, Course: ${courseId || 'Missing'}). Please ensure you are logged in.`);
+    }
+    log(`User ID: ${userId}, Course ID: ${courseId}`);
 
     // 3. Fetch Course Syllabus
     log("Fetching course syllabus...");
@@ -532,16 +584,7 @@ async function completeSingleReading(userId, courseId, courseSlug, itemId) {
             return false; 
         }
 
-        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
-        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
-        
-        const headers = {
-            'Content-Type': 'application/json',
-            'x-csrf3-token': csrfToken,
-            'x-coursera-application': 'ondemand',
-            'x-requested-with': 'XMLHttpRequest',
-        };
-
+        const headers = getCourseraHeaders();
         const completionId = `${userId}~${courseId}~${itemId}`;
         const resourceUrl = `https://www.coursera.org/api/onDemandSupplementCompletions.v1/${completionId}`;
         const collectionUrl = `https://www.coursera.org/api/onDemandSupplementCompletions.v1`;
@@ -614,15 +657,7 @@ function sanitizeHumanStudentResponse(rawText) {
 async function completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig, courseContext = null) {
     try {
         log(`Processing Discussion Prompt: ${item.name}...`);
-        
-        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
-        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
-        const headers = {
-            'Content-Type': 'application/json',
-            'x-csrf3-token': csrfToken,
-            'x-coursera-application': 'ondemand',
-            'x-requested-with': 'XMLHttpRequest',
-        };
+        const headers = getCourseraHeaders();
 
         // 1. Fetch discussion prompt question text
         let promptText = item.name;
@@ -719,15 +754,7 @@ Strict Safety & Style Guidelines:
 async function completePracticeLabOrLti(userId, courseId, courseSlug, item) {
     try {
         log(`Processing Practice Lab / LTI: ${item.name}...`);
-
-        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
-        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
-        const headers = {
-            'Content-Type': 'application/json',
-            'x-csrf3-token': csrfToken,
-            'x-coursera-application': 'ondemand',
-            'x-requested-with': 'XMLHttpRequest',
-        };
+        const headers = getCourseraHeaders();
 
         // 1. Touch LTI Item Passes API
         try {
@@ -856,14 +883,7 @@ async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig
             await new Promise(r => setTimeout(r, 500));
         }
 
-        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
-        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
-        const headers = {
-            'Content-Type': 'application/json',
-            'x-csrf3-token': csrfToken,
-            'x-coursera-application': 'ondemand',
-            'x-requested-with': 'XMLHttpRequest',
-        };
+        const headers = getCourseraHeaders();
 
         // 2. Call backend End Session & Dialogue Completion Actions
         const sessionActionEndpoints = [
@@ -1005,8 +1025,12 @@ async function processQuizItem(userId, courseId, item, aiConfig, courseContext =
 }
 
 async function processExamItem(userId, courseId, item, aiConfig, courseContext = null) {
-    log(`Processing Exam / Graded Quiz: ${item.name}...`);
-    await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
+    try {
+        log(`Processing Graded Exam / Assessment: ${item.name}...`);
+        await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
+    } catch (e) {
+        log(`Error processing exam: ${e.message}`);
+    }
 }
 
 async function processUngradedAssignment(userId, courseId, item, aiConfig, courseContext = null) {
@@ -1016,15 +1040,7 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
     log(`Processing Practice / Graded Assignment: ${item.name}...`);
 
     const graphqlUrl = 'https://www.coursera.org/graphql-gateway?opname=Submission_StartAttempt';
-    const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
-    const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
-    
-    const headers = {
-        'Content-Type': 'application/json',
-        'x-csrf3-token': csrfToken,
-        'x-coursera-application': 'ondemand',
-        'x-requested-with': 'XMLHttpRequest',
-    };
+    const headers = getCourseraHeaders();
 
     const query = `mutation Submission_StartAttempt($courseId: ID!, $itemId: ID!) {
       Submission_StartAttempt(input: {courseId: $courseId, itemId: $itemId}) {
@@ -1131,14 +1147,7 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
 
 async function markAssignmentCompletedFallback(userId, courseId, item) {
     try {
-        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
-        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
-        const headers = {
-            'Content-Type': 'application/json',
-            'x-csrf3-token': csrfToken,
-            'x-coursera-application': 'ondemand',
-            'x-requested-with': 'XMLHttpRequest',
-        };
+        const headers = getCourseraHeaders();
 
         const postBody = JSON.stringify({
             courseId: courseId,
@@ -2203,12 +2212,17 @@ async function solveQuestions(endpoint, courseId, itemId, questions, headers, ai
             const isCheckbox = (q.type === 'Submission_CheckboxQuestion' || q.type === 'Submission_CheckboxReflectQuestion');
             const isNumeric = (q.type === 'Submission_NumericQuestion' || q.type === 'Submission_SingleNumericQuestion' || q.type === 'Submission_MathQuestion');
             const isText = (q.type === 'Submission_PlainTextQuestion' || q.type === 'Submission_ShortAnswerQuestion' || q.type === 'Submission_TextExactMatchQuestion' || q.type === 'Submission_TextReflectQuestion');
+            const isCode = (q.type === 'Submission_CodeExpressionQuestion');
+            const isRichText = (q.type === 'Submission_RichTextQuestion');
+            const isRegex = (q.type === 'Submission_RegexQuestion');
+            const isUrl = (q.type === 'Submission_UrlQuestion' || q.type === 'Submission_FileUploadQuestion');
+            const isWidget = (q.type === 'Submission_WidgetQuestion');
 
             const courseHeader = courseContext?.courseTitle 
                 ? `Course Context:\n- Course: ${courseContext.courseTitle}\n- Module: ${courseContext.moduleName || 'General'}\n- Assignment: ${courseContext.assignmentName || 'Quiz'}\n` 
                 : '';
 
-            if (isText) {
+            if (isText || isRichText) {
                 prompt = `You are a top-performing student solving an assignment in a Coursera course.
 
 ${courseHeader}
@@ -2219,6 +2233,34 @@ Strict Safety & Style Guidelines:
 - Provide a direct, concise, and accurate answer strictly based on the conventions, terminology, and tools taught in this specific course.
 - NEVER disclose, mention, or imply that you are an AI, language model, assistant, or automated system.
 - Do NOT include any conversational preamble, quotes, or explanations. Output ONLY the answer text.`;
+            } else if (isCode) {
+                prompt = `You are writing code to solve a programming question in a Coursera course.
+
+${courseHeader}
+Question:
+${q.prompt?.text || "No question prompt available"}
+
+Strict Guidelines:
+- Provide ONLY the raw source code required to solve the task.
+- Do NOT wrap your response in markdown code blocks (\`\`\`) or conversational text.
+- Follow the exact coding conventions of this course.`;
+            } else if (isRegex) {
+                prompt = `You are solving a regular expression / pattern matching question in a Coursera course.
+
+${courseHeader}
+Question:
+${q.prompt?.text || "No question prompt available"}
+
+Strict Guidelines:
+- Provide ONLY the exact matching string or regex pattern. Do not include markdown or explanations.`;
+            } else if (isUrl) {
+                prompt = `You are providing a submission link for a Coursera project assignment.
+
+${courseHeader}
+Question:
+${q.prompt?.text || "No question prompt available"}
+
+Provide a valid submission URL (e.g. a GitHub repository or project link). Reply with ONLY the URL.`;
             } else if (isNumeric) {
                 prompt = `You are solving a numerical calculation question in a Coursera course.
 
@@ -2229,6 +2271,19 @@ ${q.prompt?.text || "No question prompt available"}
 Strict Safety & Style Guidelines:
 - Calculate the answer accurately according to the methods taught in this course.
 - Provide ONLY the final numeric value (e.g. 42 or 3.14). Do not include words, units, or AI commentary unless explicitly specified in the question.`;
+            } else if (isWidget) {
+                // Widget question - complete directly
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'WIDGET',
+                    questionResponse: {
+                        widgetResponse: {
+                            answer: "COMPLETED"
+                        }
+                    }
+                });
+                log(`[Widget Answer Recorded] ${q.id}`);
+                continue;
             } else {
                 // MCQ / Checkbox
                 const optionsList = (q.options || []).map((o, index) => `Option ${index + 1} (${String.fromCharCode(65 + index)}): ${o.text}`).join('\n');
@@ -2259,7 +2314,7 @@ Strict Safety & Style Guidelines:
                 continue;
             }
 
-            const answerText = isText ? sanitizeHumanStudentResponse(rawAnswer) : rawAnswer;
+            const answerText = (isText || isRichText) ? sanitizeHumanStudentResponse(rawAnswer) : rawAnswer;
             log(`${providerLabel} response: ${answerText}`);
 
             if (isText) {
@@ -2277,6 +2332,63 @@ Strict Safety & Style Guidelines:
                     }
                 });
                 log(`[Saved Text]: ${answerText.trim()}`);
+
+            } else if (isRichText) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'RICH_TEXT',
+                    questionResponse: {
+                        richTextResponse: {
+                            richText: {
+                                cmlValue: `<cml><p>${answerText.trim()}</p></cml>`,
+                                dtdId: "richText/1"
+                            }
+                        }
+                    }
+                });
+                log(`[Saved RichText]: ${answerText.trim()}`);
+
+            } else if (isCode) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'CODE_EXPRESSION',
+                    questionResponse: {
+                        codeExpressionResponse: {
+                            answer: {
+                                code: answerText.trim()
+                            }
+                        }
+                    }
+                });
+                log(`[Saved Code]: ${answerText.trim().substring(0, 50)}...`);
+
+            } else if (isRegex) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'REGEX',
+                    questionResponse: {
+                        regexResponse: {
+                            answer: answerText.trim()
+                        }
+                    }
+                });
+                log(`[Saved Regex]: ${answerText.trim()}`);
+
+            } else if (isUrl) {
+                const urlMatch = answerText.match(/https?:\/\/[^\s]+/);
+                const finalUrl = urlMatch ? urlMatch[0] : `https://www.coursera.org/learn/${courseContext?.courseSlug || 'course'}`;
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'URL',
+                    questionResponse: {
+                        urlResponse: {
+                            url: finalUrl,
+                            title: "Submission",
+                            caption: "Completed"
+                        }
+                    }
+                });
+                log(`[Saved URL]: ${finalUrl}`);
 
             } else if (isNumeric) {
                 const numMatch = answerText.match(/[-+]?[0-9]*\.?[0-9]+/);
@@ -2422,15 +2534,43 @@ function matchGeminiAnswerToOptions(answerText, options) {
         }
     }
 
-    // 4. Fallback: Substring / text comparison against option texts
+    // 4. Fallback: Ranked Substring & Token Similarity matching
     if (matched.length === 0) {
-        const cleanAnswer = answerText.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim();
+        const normalize = str => (str || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        const cleanAnswer = normalize(answerText);
+        const answerTokens = new Set(cleanAnswer.split(' ').filter(t => t.length > 2));
+
+        let bestMatch = null;
+        let highestScore = 0;
+
         for (const opt of options) {
             if (!opt.text) continue;
-            const cleanOpt = opt.text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim();
-            if (cleanOpt.length > 0 && (cleanAnswer.includes(cleanOpt) || cleanOpt.includes(cleanAnswer))) {
+            const cleanOpt = normalize(opt.text);
+            if (!cleanOpt) continue;
+
+            // Direct equality or strong inclusion
+            if (cleanAnswer === cleanOpt) {
+                addOption(opt);
+                return matched;
+            }
+            if (cleanOpt.length >= 4 && (cleanAnswer.includes(cleanOpt) || cleanOpt.includes(cleanAnswer))) {
                 addOption(opt);
             }
+
+            // Token overlap score
+            const optTokens = cleanOpt.split(' ').filter(t => t.length > 2);
+            if (optTokens.length > 0) {
+                const overlap = optTokens.filter(t => answerTokens.has(t)).length;
+                const score = overlap / optTokens.length;
+                if (score > highestScore && score >= 0.5) {
+                    highestScore = score;
+                    bestMatch = opt;
+                }
+            }
+        }
+
+        if (matched.length === 0 && bestMatch) {
+            addOption(bestMatch);
         }
     }
 
@@ -2586,18 +2726,6 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
     }
 }
 
-async function processExamItem(userId, courseId, item, aiConfig, courseContext = null) {
-    try {
-        log(`Processing Graded Exam / Assessment: ${item.name}...`);
-        
-        // Attempt GraphQL assignment first (modern Coursera exams use GraphQL gateway)
-        await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
-
-    } catch (e) {
-        log(`Error processing exam: ${e.message}`);
-    }
-}
-
 /**
  * Queries real-time completion state from Coursera's progress APIs,
  * builds a module-by-module and category breakdown, logs the formatted report,
@@ -2606,15 +2734,7 @@ async function processExamItem(userId, courseId, item, aiConfig, courseContext =
 async function generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules = []) {
     try {
         log(`Generating Course Completion & Module Summary Report...`);
-
-        const csrfTokenMatch = document.cookie.match(/CSRF3-Token=([^;]+)/);
-        const csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
-        const headers = {
-            'Content-Type': 'application/json',
-            'x-csrf3-token': csrfToken,
-            'x-coursera-application': 'ondemand',
-            'x-requested-with': 'XMLHttpRequest',
-        };
+        const headers = getCourseraHeaders();
 
         // 1. Fetch completed item IDs from Coursera Progress API
         const completedIds = new Set();
@@ -2757,8 +2877,9 @@ async function generateCourseSummaryReport(userId, courseId, courseSlug, courseT
         }
         log(`========================================`);
 
-        // Send report to popup UI
+        // Send report to popup UI and persist directly to storage
         chrome.runtime.sendMessage({ action: "summary_report", data: reportData }).catch(() => {});
+        chrome.storage.local.set({ latestSummaryReport: reportData });
         return reportData;
 
     } catch (err) {

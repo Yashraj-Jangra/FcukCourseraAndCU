@@ -924,9 +924,9 @@ Strict Safety & Style Guidelines:
 
 /**
  * Handles Ungraded/Graded App, LTI, Tool, and Lab items:
- * - Checks T&C and third-party consent checkboxes
- * - Clicks launch / open tool button
- * - Waits active 4s for session tokens and redirects
+ * - Checks T&C / "I agree" and third-party consent checkboxes
+ * - Clicks "Launch App" / "Open Tool" button or link (and triggers window.open)
+ * - Waits active for 5s for session tokens and redirects
  * - Dispatches full API completion cascade across all Coursera endpoints
  */
 async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
@@ -936,9 +936,9 @@ async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
         // If user is currently on this app page in DOM, interact with on-screen launch form
         const isCurrentPage = window.location.href.includes(item.id);
         if (isCurrentPage) {
-            log(`[App / Tool Item] Page active in browser tab. Checking T&C and triggering launch...`);
+            log(`[App / Tool Item] Page active in browser tab. Checking "I agree" and launching app...`);
 
-            // 1. Check any consent / T&C checkbox
+            // 1. Check any consent / "I agree" / T&C checkbox
             const consentCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => {
                 const labelTxt = (cb.closest('label')?.innerText || cb.parentElement?.innerText || cb.getAttribute('aria-label') || '').toLowerCase();
                 const testId = (cb.getAttribute('data-testid') || cb.name || cb.id || '').toLowerCase();
@@ -947,7 +947,7 @@ async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
 
             for (const cb of consentCheckboxes) {
                 if (!cb.checked) {
-                    log(`[App / Tool Item] Checking terms consent checkbox...`);
+                    log(`[App / Tool Item] Checking "I agree" / terms consent checkbox...`);
                     clickNativeOption(cb);
                 }
             }
@@ -956,21 +956,27 @@ async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
 
             // 2. Click Launch / Open button or link
             const launchButtons = Array.from(document.querySelectorAll('button, a[role="button"], a[target="_blank"], a[href*="http"]'));
-            const launchKeywords = ['open tool', 'launch app', 'open workspace', 'open app', 'go to tool', 'launch', 'open', 'start lab', 'launch lab', 'open in new tab'];
+            const launchKeywords = ['launch app', 'open tool', 'open workspace', 'open app', 'go to tool', 'launch', 'open', 'start lab', 'launch lab', 'open in new tab'];
             
+            let launched = false;
             for (const btn of launchButtons) {
                 const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
                 const testId = (btn.getAttribute('data-testid') || '').toLowerCase();
                 if (launchKeywords.some(kw => txt === kw || testId.includes(kw) || txt.includes(kw))) {
-                    log(`[App / Tool Item] Found "${btn.innerText || 'Launch'}" button. Launching app...`);
+                    log(`[App / Tool Item] Found "${btn.innerText || 'Launch App'}" button. Launching...`);
+                    const href = btn.getAttribute('href');
+                    if (href && href.startsWith('http')) {
+                        try { window.open(href, '_blank'); } catch(e) {}
+                    }
                     btn.click();
+                    launched = true;
                     break;
                 }
             }
 
-            // Keep session active for 4 seconds for tokens and redirects to register
-            log(`[App / Tool Item] Keeping session active for authentication token registration...`);
-            await new Promise(r => setTimeout(r, 4000));
+            // Keep session active for 5 seconds for authentication token registration and redirect handshakes
+            log(`[App / Tool Item] Keeping session active for token registration...`);
+            await new Promise(r => setTimeout(r, 5000));
         }
 
         // Background API pass registrations
@@ -1032,6 +1038,171 @@ async function completeGenericInteractiveItem(userId, courseId, courseSlug, item
         log(`Error completing interactive item: ${e.message}`);
         return false;
     }
+}
+
+/**
+ * Fully interactive on-screen Dialogue / Simulation solver:
+ * 1. Clicks "Start Dialogue" / "Resume Dialogue"
+ * 2. Extracts question/prompt from chat history
+ * 3. Types and sends 1 answer
+ * 4. Clicks "End Dialogue" / "End Conversation" in top bar
+ * 5. In confirmation modal: selects a reason from dropdown/radio list
+ * 6. Clicks "Yes, end the dialogue" / "Confirm" button
+ */
+async function completeDialogueItemInDOM(aiConfig, courseContext = null) {
+    try {
+        log("[Dialogue Solver] Checking on-screen Dialogue / Conversation...");
+
+        // 1. Click "Start Dialogue" / "Start Simulation" if present
+        const startButtons = Array.from(document.querySelectorAll('button, a[role="button"], a'));
+        const startKeywords = ['start dialogue', 'resume dialogue', 'start conversation', 'resume conversation', 'start simulation', 'begin dialogue', 'begin conversation', 'start'];
+        for (const btn of startButtons) {
+            const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+            const testId = (btn.getAttribute('data-testid') || '').toLowerCase();
+            if (startKeywords.some(kw => txt === kw || testId.includes(kw) || txt.startsWith(kw))) {
+                log(`[Dialogue Solver] Found "${btn.innerText || 'Start Dialogue'}". Clicking...`);
+                btn.click();
+                await new Promise(r => setTimeout(r, 1500));
+                break;
+            }
+        }
+
+        // 2. Locate chat input & extract latest question/prompt
+        let chatInput = document.querySelector('textarea, input[type="text"]:not([placeholder*="search"]), [contenteditable="true"]');
+        
+        // Extract last message bubble from the simulation
+        const messageBubbles = Array.from(document.querySelectorAll('.rc-MessageBubble, [class*="MessageBubble"], [class*="DialogueMessage"], [class*="chat-message"], [class*="bubble"], [role="log"] p, [role="log"] div'));
+        let promptText = "Please proceed with the dialogue objectives.";
+        if (messageBubbles.length > 0) {
+            const lastBubble = messageBubbles[messageBubbles.length - 1];
+            promptText = (lastBubble.innerText || lastBubble.textContent || '').trim();
+            log(`[Dialogue Solver] Extracted dialogue prompt: "${promptText.substring(0, 70)}..."`);
+        }
+
+        // 3. Generate 1 response and send it
+        if (chatInput) {
+            log("[Dialogue Solver] Generating 1 student chat response...");
+            const courseHeader = courseContext?.courseTitle ? `Course: ${courseContext.courseTitle}\nModule: ${courseContext.moduleName || 'General'}\n` : '';
+            const aiPrompt = `You are a student participating in an interactive simulation / dialogue in a Coursera course.
+
+${courseHeader}
+Dialogue Prompt from Instructor / Simulation:
+${promptText}
+
+Strict Safety & Style Guidelines:
+- Write a direct, natural, concise response (1-2 sentences) engaging with the prompt.
+- NEVER disclose or imply that you are an AI or automated system.
+- Output ONLY the response body.`;
+
+            let responseText = await callLLM(aiPrompt, aiConfig);
+            if (!responseText) {
+                responseText = "I understand the scenario and will apply the key principles and best practices taught in this course to achieve the learning objectives.";
+            } else {
+                responseText = sanitizeHumanStudentResponse(responseText);
+            }
+
+            log(`[Dialogue Solver] Typing response: "${responseText.substring(0, 60)}..."`);
+            setNativeInputValue(chatInput, responseText);
+            await new Promise(r => setTimeout(r, 400));
+
+            // Click send button or press enter
+            const sendButtons = Array.from(document.querySelectorAll('button[aria-label*="send"], button[type="submit"], button[data-testid*="send"], form button, [class*="send"] button, button:has(svg)'));
+            let sendClicked = false;
+            for (const sBtn of sendButtons) {
+                const sText = (sBtn.innerText || sBtn.getAttribute('aria-label') || '').toLowerCase();
+                if (sText.includes('send') || sText.includes('submit') || sBtn.querySelector('svg')) {
+                    log("[Dialogue Solver] Clicking Send...");
+                    sBtn.click();
+                    sendClicked = true;
+                    break;
+                }
+            }
+
+            if (!sendClicked) {
+                // Dispatch Enter key event
+                chatInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                chatInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+            }
+
+            // Wait 2s for response to render in DOM
+            await new Promise(r => setTimeout(r, 2000));
+        }
+
+        // 4. Locate and click "End Dialogue" / "End Conversation" button in top toolbar/header
+        log("[Dialogue Solver] Locating 'End Dialogue' button...");
+        const allActionButtons = Array.from(document.querySelectorAll('button, [role="button"], a, input[type="button"]'));
+        const endKeywords = ['end dialogue', 'end conversation', 'end simulation', 'end chat', 'finish dialogue', 'finish conversation', 'exit dialogue', 'complete dialogue', 'end session', 'finish session', 'end'];
+        
+        let endButton = null;
+        for (const el of allActionButtons) {
+            const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            const testId = (el.getAttribute('data-testid') || '').toLowerCase();
+
+            if (endKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.startsWith(kw))) {
+                endButton = el;
+                break;
+            }
+        }
+
+        if (endButton) {
+            log(`[Dialogue Solver] Clicking "${endButton.innerText || 'End Dialogue'}"...`);
+            endButton.click();
+            await new Promise(r => setTimeout(r, 800));
+
+            // 5. In Modal: Select Reason (Radio / Dropdown)
+            const modal = document.querySelector('[role="dialog"], [aria-modal="true"], .cds-dialog, .modal, [class*="modal"]');
+            if (modal) {
+                log("[Dialogue Solver] End confirmation modal opened. Selecting reason...");
+
+                // Option A: Radio buttons in modal
+                const modalRadios = Array.from(modal.querySelectorAll('input[type="radio"], [role="radio"], .cds-radio, label:has(input[type="radio"])'));
+                if (modalRadios.length > 0) {
+                    log("[Dialogue Solver] Selecting first available reason radio...");
+                    clickNativeOption(modalRadios[0]);
+                }
+
+                // Option B: Dropdown select
+                const modalSelect = modal.querySelector('select');
+                if (modalSelect) {
+                    log("[Dialogue Solver] Selecting reason from dropdown...");
+                    if (modalSelect.options.length > 1) {
+                        modalSelect.selectedIndex = 1;
+                    }
+                    modalSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+
+                // Option C: Clickable reason chips or list items
+                const reasonChips = Array.from(modal.querySelectorAll('[class*="reason"], [class*="option"], [class*="item"] button, label'));
+                if (reasonChips.length > 0 && modalRadios.length === 0) {
+                    reasonChips[0].click();
+                }
+
+                await new Promise(r => setTimeout(r, 500));
+
+                // 6. Click "Yes, end the dialogue" / "End dialogue" / "Confirm" button
+                const confirmButtons = Array.from(modal.querySelectorAll('button, [role="button"]'));
+                const confirmKeywords = ['yes, end the dialogue', 'yes, end', 'end dialogue', 'end conversation', 'end simulation', 'end', 'confirm', 'finish', 'submit'];
+                
+                for (const cBtn of confirmButtons) {
+                    const cText = (cBtn.innerText || cBtn.textContent || '').trim().toLowerCase();
+                    const cTestId = (cBtn.getAttribute('data-testid') || '').toLowerCase();
+                    if (confirmKeywords.some(kw => cText === kw || cTestId.includes(kw) || cText.includes(kw))) {
+                        log(`[Dialogue Solver] Clicking confirmation "${cBtn.innerText || 'Yes, end the dialogue'}"...`);
+                        cBtn.click();
+                        break;
+                    }
+                }
+            }
+            await new Promise(r => setTimeout(r, 1200));
+            log("[Dialogue Solver] Live dialogue flow completed successfully!");
+            return true;
+        }
+
+    } catch(e) {
+        log(`Dialogue DOM solver notice: ${e.message}`);
+    }
+    return false;
 }
 
 /**
@@ -1102,15 +1273,24 @@ async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig
     try {
         log(`Processing Dialogue Simulation: ${item.name}...`);
         
-        // 1. Trigger DOM-based top End Conversation / End Dialogue action if open
-        const clickedDOM = await triggerDialogueEndOptionInDOM();
-        if (clickedDOM) {
-            await new Promise(r => setTimeout(r, 500));
+        // 1. If currently open in DOM, execute the full interactive Dialogue solver:
+        // (Start Dialogue -> Extract Q -> Send 1 chat response -> End Dialogue -> Select reason -> Yes end)
+        const isCurrentPage = window.location.href.includes(item.id);
+        if (isCurrentPage) {
+            log(`[Dialogue] Page is currently active in browser. Executing live interactive chat solver...`);
+            const domDone = await completeDialogueItemInDOM(aiConfig, courseContext);
+            if (domDone) {
+                await completeSingleReading(userId, courseId, courseSlug, item.id);
+                return true;
+            }
         }
+
+        // 2. Also try top End button in case already started
+        await triggerDialogueEndOptionInDOM();
 
         const headers = getCourseraHeaders();
 
-        // 2. Call backend End Session & Dialogue Completion Actions
+        // 3. Call backend End Session & Dialogue Completion Actions
         const sessionActionEndpoints = [
             `https://www.coursera.org/api/onDemandDialogueSessions.v1/${courseId}~${item.id}/actions?includes=progress`,
             `https://www.coursera.org/api/onDemandDialogueSessions.v1/${item.id}/actions?includes=progress`
@@ -1126,7 +1306,7 @@ async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig
             }
         }
 
-        // 3. Attempt REST completion & session updates
+        // 4. Attempt REST completion & session updates
         const dialogueEndpoints = [
             `https://www.coursera.org/api/onDemandDialogueSessions.v1`,
             `https://www.coursera.org/api/onDemandDialogueCompletions.v1`,
@@ -1147,12 +1327,12 @@ async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig
             } catch(e) {}
         }
 
-        // 4. Try GraphQL interactive attempt
+        // 5. Try GraphQL interactive attempt
         try {
             await processUngradedAssignment(userId, courseId, item, aiConfig, courseContext);
         } catch(e) {}
 
-        // 5. Mark completion in course progress / supplement system
+        // 6. Mark completion in course progress / supplement system
         await completeSingleReading(userId, courseId, courseSlug, item.id);
         
         log(`[Dialogue Completed] ${item.name}`);

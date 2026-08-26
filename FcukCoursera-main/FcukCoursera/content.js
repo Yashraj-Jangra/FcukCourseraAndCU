@@ -1119,25 +1119,17 @@ async function completeUngradedAppItemInDOM() {
         // A. Standard & React Aria Checkboxes (cds-241, value="agree", etc.)
         const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"], [aria-checked]'));
         for (const cb of allCheckboxes) {
-            const isChecked = cb.checked || cb.getAttribute('aria-checked') === 'true';
-            if (!isChecked) {
-                log(`[App / Tool Solver] Checking React Aria consent checkbox (ID: ${cb.id || 'agree'})...`);
-                setNativeCheckbox(cb, true);
-                actionTaken = true;
-            }
+            log(`[App / Tool Solver] Setting consent checkbox state (ID: ${cb.id || 'agree'})...`);
+            setNativeCheckbox(cb, true);
+            actionTaken = true;
         }
         
-        // B. Target labels, spans, and divs containing responsible use / consent text
-        const allLabelsAndContainers = Array.from(document.querySelectorAll('label, div[class*="checkbox"], div[class*="Checkbox"], span[class*="checkbox"], span[class*="Checkbox"], [data-testid*="checkbox"], [data-testid*="consent"], [data-testid*="agree"]'));
-        for (const container of allLabelsAndContainers) {
-            const txt = (container.innerText || container.textContent || '').trim().toLowerCase();
-            if (consentKeywords.some(kw => txt.includes(kw))) {
-                const childInput = container.querySelector('input[type="checkbox"]');
-                if (childInput && !childInput.checked) {
-                    log(`[App / Tool Solver] Checking consent box: "${txt.substring(0, 50)}..."`);
-                    setNativeCheckbox(childInput, true);
-                    actionTaken = true;
-                } else if (!childInput) {
+        // B. Fallback for custom toggle containers without standard input
+        if (allCheckboxes.length === 0) {
+            const allLabelsAndContainers = Array.from(document.querySelectorAll('label, div[class*="checkbox"], div[class*="Checkbox"], [data-testid*="checkbox"], [data-testid*="consent"], [data-testid*="agree"]'));
+            for (const container of allLabelsAndContainers) {
+                const txt = (container.innerText || container.textContent || '').trim().toLowerCase();
+                if (consentKeywords.some(kw => txt.includes(kw))) {
                     log(`[App / Tool Solver] Clicking custom consent toggle: "${txt.substring(0, 50)}..."`);
                     clickNativeElement(container);
                     actionTaken = true;
@@ -1207,6 +1199,13 @@ async function completeUngradedAppItemInDOM() {
         if (targetLaunchBtn) {
             log(`[App / Tool Solver] Found Launch CTA: "${targetLaunchBtn.getAttribute('aria-label') || targetLaunchBtn.innerText || 'Launch App'}". Submitting...`);
             showOnScreenHUD(`Launching: ${targetLaunchBtn.innerText || 'App'}...`, "working");
+
+            // Guarantee every checkbox is checked = true before submitting
+            for (const cb of Array.from(document.querySelectorAll('input[type="checkbox"]'))) {
+                if (!cb.checked) {
+                    setNativeCheckbox(cb, true);
+                }
+            }
 
             // Unlock button if disabled
             targetLaunchBtn.disabled = false;
@@ -4192,38 +4191,48 @@ function setNativeInputValue(element, value) {
     }
 }
 
-function setNativeCheckbox(element, checked = true) {
+function setNativeCheckbox(element, shouldBeChecked = true) {
     if (!element) return;
     try {
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
         element.focus();
 
-        // 1. React Synthetic Checkbox Setter
-        const proto = window.HTMLInputElement.prototype;
-        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'checked')?.set;
-        if (nativeSetter) {
-            nativeSetter.call(element, checked);
-        } else {
-            element.checked = checked;
+        const isCurrentlyChecked = element.checked || element.getAttribute('aria-checked') === 'true';
+        if (isCurrentlyChecked === shouldBeChecked) {
+            return;
         }
 
-        // 2. Dispatch Interaction Events
-        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-        element.click();
-        element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-
-        // 3. Trigger parent label or aria-labelledby element click if exists
+        // 1. Natural user click simulation on label or input to let React catch standard user gesture
         const ariaLabelId = element.getAttribute('aria-labelledby');
         const ariaLabelEl = ariaLabelId ? document.getElementById(ariaLabelId) : null;
         const label = element.closest('label') || document.querySelector(`label[for="${element.id}"]`) || (ariaLabelEl ? ariaLabelEl.closest('label') || ariaLabelEl : null) || element.parentElement;
+
         if (label && label !== element) {
-            label.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-            try { label.click(); } catch(e) {}
+            label.click();
+        } else {
+            element.click();
+        }
+
+        // 2. If state did not update to shouldBeChecked, enforce via React synthetic property setter
+        if (element.checked !== shouldBeChecked) {
+            const proto = window.HTMLInputElement.prototype;
+            const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'checked')?.set;
+            if (nativeSetter) {
+                nativeSetter.call(element, shouldBeChecked);
+            } else {
+                element.checked = shouldBeChecked;
+            }
+            element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        }
+
+        // 3. Keep ARIA and validity in sync
+        element.setAttribute('aria-checked', shouldBeChecked ? 'true' : 'false');
+        if (element.setCustomValidity) {
+            element.setCustomValidity('');
         }
     } catch(e) {
-        try { element.click(); } catch(err) {}
+        try { element.checked = shouldBeChecked; } catch(err) {}
     }
 }
 

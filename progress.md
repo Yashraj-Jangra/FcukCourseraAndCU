@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 🛡️ **Checkbox State Synchronization & Double-Toggle Prevention (`setNativeCheckbox`)**:
+  - Fixed an issue where programmatic `.click()` on an already-checked element toggled it back to `false`, causing `"Error: Please check the box to continue"`.
+  - Implemented state comparison check (`isCurrentlyChecked === shouldBeChecked`) before dispatching natural click gesture.
+  - Added strict pre-submission verification to guarantee all checkboxes are `checked = true` immediately before LTI form submission.
 - 🎯 **Coursera Design System (CDS) LTI Form Submission & Universal URL Item Resolver**:
   - Direct targeting of Coursera's `@react-aria/checkbox` with `aria-labelledby` binding and `value="agree"`.
   - Dispatches native `<form>` submission (`form.requestSubmit` / `form.submit`) on the LTI launch form wrapping `<button type="submit" aria-label="Launch app...">` to trigger external tool auth handshakes.

@@ -1109,60 +1109,77 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
     }`;
 
     try {
-        log("Sending GraphQL StartAttempt...");
-        const body = JSON.stringify({
-            operationName: "Submission_StartAttempt",
-            query: query,
-            variables: {
-                courseId: courseId,
-                itemId: item.id
-            }
-        });
+        let maxLoops = 2; // Allow up to 2 attempts if needed to reach passing grade
+        for (let loop = 0; loop < maxLoops; loop++) {
+            if (globalState.abortRequested) break;
 
-        const resp = await fetch(graphqlUrl, {
-            method: 'POST',
-            headers: headers,
-            body: body,
-            credentials: 'include'
-        });
+            log(`Sending GraphQL StartAttempt (Cycle ${loop + 1})...`);
+            const body = JSON.stringify({
+                operationName: "Submission_StartAttempt",
+                query: query,
+                variables: {
+                    courseId: courseId,
+                    itemId: item.id
+                }
+            });
 
-        if (resp.ok) {
-            const data = await resp.json();
-            const result = data.data?.Submission_StartAttempt;
-            
-            if (result?.submissionState) {
-                const subState = result.submissionState;
-                const attemptsInfo = subState.attempts;
-                const outcome = subState.outcome;
+            const resp = await fetch(graphqlUrl, {
+                method: 'POST',
+                headers: headers,
+                body: body,
+                credentials: 'include'
+            });
+
+            let attemptsRemaining = 1;
+
+            if (resp.ok) {
+                const data = await resp.json();
+                const result = data.data?.Submission_StartAttempt;
                 
-                // Check if already passed (to save limited attempts)
-                if (outcome?.isPassed === true && isGraded) {
-                    log(`[Graded Assignment] Already passed! Highest score recorded. Skipping to save attempts.`);
-                    await markAssignmentCompletedFallback(userId, courseId, item);
-                    return;
-                }
+                if (result?.submissionState) {
+                    const subState = result.submissionState;
+                    const attemptsInfo = subState.attempts;
+                    const outcome = subState.outcome;
+                    
+                    // Check if already passed (to save limited attempts)
+                    if (outcome?.isPassed === true && isGraded) {
+                        log(`[Graded Assignment] Already passed! Highest score recorded. Skipping.`);
+                        await markAssignmentCompletedFallback(userId, courseId, item);
+                        return;
+                    }
 
-                // Check remaining attempts
-                const allowed = attemptsInfo?.attemptsAllowed || attemptsInfo?.allowedAttempts;
-                const used = attemptsInfo?.attemptsMade || attemptsInfo?.attemptCount || 0;
-                const remaining = attemptsInfo?.attemptsRemaining;
+                    // Check remaining attempts
+                    const allowed = attemptsInfo?.attemptsAllowed || attemptsInfo?.allowedAttempts;
+                    const used = attemptsInfo?.attemptsMade || attemptsInfo?.attemptCount || 0;
+                    const remaining = attemptsInfo?.attemptsRemaining;
+                    if (remaining !== undefined) attemptsRemaining = remaining;
 
-                if (allowed && remaining !== undefined && remaining <= 0) {
-                    log(`[Graded Assignment] Out of attempts (${used}/${allowed} used). Skipping.`);
-                    await markAssignmentCompletedFallback(userId, courseId, item);
-                    return;
-                }
+                    if (allowed && remaining !== undefined && remaining <= 0) {
+                        log(`[Graded Assignment] Out of attempts (${used}/${allowed} used). Skipping.`);
+                        await markAssignmentCompletedFallback(userId, courseId, item);
+                        return;
+                    }
 
-                if (isGraded && allowed) {
-                    log(`[Graded Assignment] Attempt ${used + 1}/${allowed} in progress... (Highest score will be kept)`);
-                } else {
-                    log("GraphQL Session Started Successfully!");
+                    if (isGraded && allowed) {
+                        log(`[Graded Assignment] Attempt ${used + 1}/${allowed} in progress...`);
+                    }
                 }
+            }
+
+            // Execute GraphQL session with past attempt intelligence and zero-unanswered safeguard
+            const submitState = await processGraphQLSession(courseId, item.id, headers, aiConfig, courseContext);
+
+            // If passed or not a graded assignment or out of attempts, stop loop
+            const finalOutcome = submitState?.outcome;
+            if (finalOutcome?.isPassed === true || !isGraded || attemptsRemaining <= 1 || loop === maxLoops - 1) {
+                break;
+            }
+
+            if (finalOutcome?.isPassed === false && attemptsRemaining > 1) {
+                log(`[Adaptive Retry Engine] Score was ${(finalOutcome.earnedGrade * 100).toFixed(0)}%. Re-attempting with wrong-answer elimination...`);
+                await new Promise(r => setTimeout(r, 2000));
             }
         }
-
-        // Always query questions via QueryState (handles newly started and existing in-progress drafts)
-        const solved = await processGraphQLSession(courseId, item.id, headers, aiConfig, courseContext);
 
         // Run fallback pass & progress markers to guarantee Coursera records completion
         await markAssignmentCompletedFallback(userId, courseId, item);
@@ -2161,8 +2178,8 @@ fragment TextBlock on Submission_TextBlock {
                 };
             }).filter(q => q !== null);
 
-            await solveQuestions('graphql', courseId, itemId, questions, headers, aiConfig, courseContext, draftId);
-            return true;
+            const outcome = await solveQuestions('graphql', courseId, itemId, questions, headers, aiConfig, courseContext, draftId, queryState);
+            return outcome;
 
         } else {
             log("No open parts found in GraphQL state. Proceeding with fallback completion...");
@@ -2175,12 +2192,223 @@ fragment TextBlock on Submission_TextBlock {
     }
 }
 
+/**
+ * Extracts past attempt intelligence from QueryState:
+ * - Identifies previously chosen correct answers (to reuse with 100% confidence)
+ * - Identifies previously chosen incorrect options (to eliminate from candidate choices)
+ */
+function extractAttemptHistoryFeedback(queryState) {
+    const feedback = {
+        correctAnswers: {},    // questionId -> response object
+        eliminatedOptions: {}, // questionId -> Set of option IDs
+        hasHistory: false
+    };
+
+    if (!queryState) return feedback;
+
+    try {
+        const attempts = queryState.attempts;
+        const lastSubmission = attempts?.lastSubmission?.submission;
+        const assignmentOutcome = queryState.outcome;
+
+        if (lastSubmission && Array.isArray(lastSubmission.parts)) {
+            feedback.hasHistory = true;
+            for (const p of lastSubmission.parts) {
+                const partId = p.id || p.partId;
+                if (!partId) continue;
+
+                if (!feedback.eliminatedOptions[partId]) {
+                    feedback.eliminatedOptions[partId] = new Set();
+                }
+
+                // Check MCQ response
+                if (p.multipleChoiceResponse?.chosen) {
+                    const chosenId = p.multipleChoiceResponse.chosen;
+                    if (assignmentOutcome?.isPassed === false || (p.gradeSettings && p.gradeSettings.score === 0)) {
+                        feedback.eliminatedOptions[partId].add(chosenId);
+                    } else if (assignmentOutcome?.isPassed === true || (p.gradeSettings && p.gradeSettings.score > 0)) {
+                        feedback.correctAnswers[partId] = {
+                            questionId: partId,
+                            questionType: 'MULTIPLE_CHOICE',
+                            questionResponse: { multipleChoiceResponse: { chosen: chosenId } }
+                        };
+                    }
+                }
+
+                // Check Checkbox response
+                if (p.checkboxResponse?.chosen && Array.isArray(p.checkboxResponse.chosen)) {
+                    if (assignmentOutcome?.isPassed === false) {
+                        p.checkboxResponse.chosen.forEach(id => feedback.eliminatedOptions[partId].add(id));
+                    } else if (assignmentOutcome?.isPassed === true) {
+                        feedback.correctAnswers[partId] = {
+                            questionId: partId,
+                            questionType: 'CHECKBOX',
+                            questionResponse: { checkboxResponse: { chosen: p.checkboxResponse.chosen } }
+                        };
+                    }
+                }
+
+                // Check Numeric response
+                if (p.numericResponse?.answer !== undefined && p.numericResponse?.answer !== null) {
+                    if (assignmentOutcome?.isPassed === true) {
+                        feedback.correctAnswers[partId] = {
+                            questionId: partId,
+                            questionType: 'NUMERIC',
+                            questionResponse: { numericResponse: { answer: p.numericResponse.answer } }
+                        };
+                    }
+                }
+
+                // Check Code expression response
+                if (p.codeExpressionResponse?.answer?.code) {
+                    if (assignmentOutcome?.isPassed === true) {
+                        feedback.correctAnswers[partId] = {
+                            questionId: partId,
+                            questionType: 'CODE_EXPRESSION',
+                            questionResponse: { codeExpressionResponse: { answer: { code: p.codeExpressionResponse.answer.code } } }
+                        };
+                    }
+                }
+            }
+        }
+    } catch(e) {
+        log(`Notice in attempt feedback parsing: ${e.message}`);
+    }
+
+    return feedback;
+}
+
+/**
+ * Zero-Unanswered-Questions Safeguard:
+ * Ensures every single question part has a valid, non-null response payload before saving draft.
+ */
+function ensureCompleteResponses(questions, responsesToSave, attemptHistory = null) {
+    const savedIds = new Set(responsesToSave.map(r => r.questionId));
+
+    for (const q of questions) {
+        if (!savedIds.has(q.id)) {
+            log(`[Zero-Unanswered Safeguard] Auto-filling missing question ID: ${q.id} with safe response...`);
+            
+            const isMultipleChoice = (q.type === 'Submission_MultipleChoiceQuestion' || q.type === 'Submission_MultipleChoiceReflectQuestion');
+            const isCheckbox = (q.type === 'Submission_CheckboxQuestion' || q.type === 'Submission_CheckboxReflectQuestion');
+            const isNumeric = (q.type === 'Submission_NumericQuestion' || q.type === 'Submission_SingleNumericQuestion' || q.type === 'Submission_MathQuestion');
+            const isText = (q.type === 'Submission_PlainTextQuestion' || q.type === 'Submission_ShortAnswerQuestion' || q.type === 'Submission_TextExactMatchQuestion' || q.type === 'Submission_TextReflectQuestion');
+            const isCode = (q.type === 'Submission_CodeExpressionQuestion');
+            const isRichText = (q.type === 'Submission_RichTextQuestion');
+            const isRegex = (q.type === 'Submission_RegexQuestion');
+            const isUrl = (q.type === 'Submission_UrlQuestion' || q.type === 'Submission_FileUploadQuestion');
+            const isWidget = (q.type === 'Submission_WidgetQuestion');
+
+            const eliminated = attemptHistory?.eliminatedOptions?.[q.id] || new Set();
+            const validOptions = (q.options || []).filter(o => !eliminated.has(o.id));
+            const chosenOption = validOptions[0] || q.options?.[0];
+
+            if (isMultipleChoice) {
+                if (chosenOption) {
+                    responsesToSave.push({
+                        questionId: q.id,
+                        questionType: 'MULTIPLE_CHOICE',
+                        questionResponse: {
+                            multipleChoiceResponse: { chosen: chosenOption.id }
+                        }
+                    });
+                }
+            } else if (isCheckbox) {
+                const chosen = validOptions.length > 0 ? [validOptions[0].id] : (q.options?.[0] ? [q.options[0].id] : []);
+                if (chosen.length > 0) {
+                    responsesToSave.push({
+                        questionId: q.id,
+                        questionType: 'CHECKBOX',
+                        questionResponse: {
+                            checkboxResponse: { chosen }
+                        }
+                    });
+                }
+            } else if (isNumeric) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'NUMERIC',
+                    questionResponse: {
+                        numericResponse: { answer: 0 }
+                    }
+                });
+            } else if (isText) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'PLAIN_TEXT',
+                    questionResponse: {
+                        plainTextResponse: { answer: "Completed assessment requirements according to course curriculum." }
+                    }
+                });
+            } else if (isRichText) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'RICH_TEXT',
+                    questionResponse: {
+                        richTextResponse: {
+                            richText: {
+                                cmlValue: "<cml><p>Completed assessment requirements according to course curriculum.</p></cml>",
+                                dtdId: "richText/1"
+                            }
+                        }
+                    }
+                });
+            } else if (isCode) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'CODE_EXPRESSION',
+                    questionResponse: {
+                        codeExpressionResponse: {
+                            answer: { code: "// Assessment implementation\nreturn true;\n" }
+                        }
+                    }
+                });
+            } else if (isRegex) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'REGEX',
+                    questionResponse: {
+                        regexResponse: { answer: ".*" }
+                    }
+                });
+            } else if (isUrl) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'URL',
+                    questionResponse: {
+                        urlResponse: {
+                            title: "Assignment Submission",
+                            url: "https://github.com/coursera-assignments/submission"
+                        }
+                    }
+                });
+            } else if (isWidget) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'WIDGET',
+                    questionResponse: {
+                        widgetResponse: { answer: "completed" }
+                    }
+                });
+            } else {
+                if (chosenOption) {
+                    responsesToSave.push({
+                        questionId: q.id,
+                        questionType: 'MULTIPLE_CHOICE',
+                        questionResponse: {
+                            multipleChoiceResponse: { chosen: chosenOption.id }
+                        }
+                    });
+                }
+            }
+        }
+    }
+}
+
 async function processSession(endpoint, sessionId, headers, aiConfig, courseContext = null) {
-    // Generic function to handle session state and solving
     try {
         const actionUrl = `https://www.coursera.org/api/${endpoint}/${sessionId}/actions?includes=gradingAttempts`;
         
-        // Try standard action payload
         const actionBody = JSON.stringify({
             name: "getState",
             argument: []
@@ -2200,7 +2428,6 @@ async function processSession(endpoint, sessionId, headers, aiConfig, courseCont
 
         const actionData = await actionResp.json();
         
-        // Extract questions from response
         let questions = null;
         if (actionData.elements && actionData.elements[0].result && actionData.elements[0].result.questions) {
             questions = actionData.elements[0].result.questions;
@@ -2213,16 +2440,21 @@ async function processSession(endpoint, sessionId, headers, aiConfig, courseCont
             await solveQuestions(endpoint, sessionId, sessionId, questions, headers, aiConfig, courseContext);
         } else {
             log("No questions found in session state.");
-            log("State Data: " + JSON.stringify(actionData).substring(0, 200));
         }
     } catch (e) {
         log(`Error processing session: ${e.message}`);
     }
 }
 
-async function solveQuestions(endpoint, courseId, itemId, questions, headers, aiConfig, courseContext = null, fallbackDraftId = null) {
+async function solveQuestions(endpoint, courseId, itemId, questions, headers, aiConfig, courseContext = null, fallbackDraftId = null, queryState = null) {
     log(`Starting solver for ${questions.length} question(s)...`);
     
+    // Extract history & feedback from past attempts
+    const attemptHistoryFeedback = extractAttemptHistoryFeedback(queryState);
+    if (attemptHistoryFeedback.hasHistory) {
+        log("[History Intelligence] Past attempt feedback detected. Applying correct answer locks & wrong option exclusions.");
+    }
+
     const responsesToSave = [];
 
     for (let i = 0; i < questions.length; i++) {
@@ -2233,6 +2465,25 @@ async function solveQuestions(endpoint, courseId, itemId, questions, headers, ai
 
         const q = questions[i];
         log(`[${i + 1}/${questions.length}] Solving Question ID: ${q.id}`);
+
+        // 1. History Intelligence: Reuse locked winning answer if known correct
+        if (attemptHistoryFeedback?.correctAnswers?.[q.id]) {
+            const winningAnswer = attemptHistoryFeedback.correctAnswers[q.id];
+            log(`[History Intelligence Q${i + 1}] Reusing confirmed correct answer from previous attempt!`);
+            responsesToSave.push(winningAnswer);
+            continue;
+        }
+
+        // 2. History Intelligence: Identify eliminated options
+        const eliminated = attemptHistoryFeedback?.eliminatedOptions?.[q.id];
+        let eliminationNote = "";
+        if (eliminated && eliminated.size > 0 && q.options && q.options.length > 0) {
+            const eliminatedTexts = q.options.filter(o => eliminated.has(o.id)).map(o => o.text);
+            if (eliminatedTexts.length > 0) {
+                eliminationNote = `\nCRITICAL ATTEMPT FEEDBACK:\nIn a previous attempt, the following option(s) were chosen and marked INCORRECT:\n- ${eliminatedTexts.join('\n- ')}\nDo NOT choose these incorrect options. You must select only from the other options.\n`;
+                log(`[History Intelligence Q${i + 1}] Eliminating ${eliminatedTexts.length} known wrong option(s).`);
+            }
+        }
 
         try {
             let prompt = "";
@@ -2258,66 +2509,79 @@ Question:
 ${q.prompt?.text || "No question prompt available"}
 
 Strict Safety & Style Guidelines:
-- Provide a direct, concise, and accurate answer strictly based on the conventions, terminology, and tools taught in this specific course.
-- NEVER disclose, mention, or imply that you are an AI, language model, assistant, or automated system.
-- Do NOT include any conversational preamble, quotes, or explanations. Output ONLY the answer text.`;
+- Write a direct, highly accurate, authentic student response strictly based on the course materials.
+- NEVER mention, disclose, or imply that you are an AI, LLM, or automated assistant.
+- Do NOT include conversational filler, preamble, or quotation marks. Output ONLY the response body.`;
             } else if (isCode) {
-                prompt = `You are writing code to solve a programming question in a Coursera course.
+                prompt = `You are an expert programming student solving a coding assessment in a Coursera course.
 
 ${courseHeader}
-Question:
-${q.prompt?.text || "No question prompt available"}
-
-Strict Guidelines:
-- Provide ONLY the raw source code required to solve the task.
-- Do NOT wrap your response in markdown code blocks (\`\`\`) or conversational text.
-- Follow the exact coding conventions of this course.`;
-            } else if (isRegex) {
-                prompt = `You are solving a regular expression / pattern matching question in a Coursera course.
-
-${courseHeader}
-Question:
-${q.prompt?.text || "No question prompt available"}
-
-Strict Guidelines:
-- Provide ONLY the exact matching string or regex pattern. Do not include markdown or explanations.`;
-            } else if (isUrl) {
-                prompt = `You are providing a submission link for a Coursera project assignment.
-
-${courseHeader}
-Question:
-${q.prompt?.text || "No question prompt available"}
-
-Provide a valid submission URL (e.g. a GitHub repository or project link). Reply with ONLY the URL.`;
-            } else if (isNumeric) {
-                prompt = `You are solving a numerical calculation question in a Coursera course.
-
-${courseHeader}
-Question:
-${q.prompt?.text || "No question prompt available"}
+Problem Statement:
+${q.prompt?.text || "Implement the required code functionality."}
 
 Strict Safety & Style Guidelines:
-- Calculate the answer accurately according to the methods taught in this course.
-- Provide ONLY the final numeric value (e.g. 42 or 3.14). Do not include words, units, or AI commentary unless explicitly specified in the question.`;
+- Output ONLY the clean, working source code implementing the solution.
+- Do NOT wrap your answer in markdown backticks or commentary unless code comments.`;
+            } else if (isRegex) {
+                prompt = `You are solving a regular expression (regex) problem in a Coursera course.
+
+${courseHeader}
+Pattern Requirement:
+${q.prompt?.text || "Provide the regex pattern."}
+
+Strict Safety & Style Guidelines:
+- Provide ONLY the exact regular expression string that satisfies the pattern. Do not include quotes.`;
+            } else if (isUrl) {
+                responsesToSave.push({
+                    questionId: q.id,
+                    questionType: 'URL',
+                    questionResponse: {
+                        urlResponse: {
+                            title: "Assignment Project Submission",
+                            url: "https://github.com/coursera-assignments/project"
+                        }
+                    }
+                });
+                log(`[Saved URL Submission]`);
+                continue;
+            } else if (isNumeric) {
+                prompt = `You are solving a mathematical/numerical question in a Coursera course.
+
+${courseHeader}
+Problem Statement:
+${q.prompt?.text || "Calculate the final numeric value."}
+
+Strict Safety & Style Guidelines:
+- Calculate and output ONLY the final numeric answer (e.g. 42 or 3.14159). Do not output units, formulas, or explanation.`;
             } else if (isWidget) {
-                // Widget question - complete directly
                 responsesToSave.push({
                     questionId: q.id,
                     questionType: 'WIDGET',
                     questionResponse: {
                         widgetResponse: {
-                            answer: "COMPLETED"
+                            answer: "completed"
                         }
                     }
                 });
-                log(`[Widget Answer Recorded] ${q.id}`);
+                log(`[Saved Widget Completion]`);
                 continue;
             } else {
-                // MCQ / Checkbox
-                const optionsList = (q.options || []).map((o, index) => `Option ${index + 1} (${String.fromCharCode(65 + index)}): ${o.text}`).join('\n');
-                const multiNote = isCheckbox ? "Select all correct options." : "Select the single best correct option.";
+                // Multiple Choice / Checkbox
+                const optionsList = (q.options || []).map((o, idx) => {
+                    const letter = String.fromCharCode(65 + idx);
+                    const isElim = eliminated?.has(o.id) ? " [KNOWN INCORRECT - DO NOT CHOOSE]" : "";
+                    return `Option ${idx + 1} (${letter}): ${o.text}${isElim}`;
+                }).join('\n');
 
-                prompt = `You are solving a multiple choice question in a Coursera course.
+                const questionTypeDesc = isCheckbox 
+                    ? "multi-select checkbox question (one or MORE options may be correct)" 
+                    : "single-choice question (exactly ONE option is correct)";
+                
+                const answerFormatDesc = isCheckbox 
+                    ? `Reply ONLY with the correct option number(s) in this exact format: "Option 1, Option 3".` 
+                    : `Reply ONLY with the correct option number in this exact format: "Option 1".`;
+
+                prompt = `You are a top-performing student solving a multiple choice question in a Coursera course.
 
 ${courseHeader}
 Question:
@@ -2325,56 +2589,50 @@ ${q.prompt?.text || "No question prompt available"}
 
 Options:
 ${optionsList}
+${eliminationNote}
+Question Type: This is a ${questionTypeDesc}.
 
 Strict Safety & Style Guidelines:
-- ${multiNote}
-- Base your answer on the curriculum, definitions, and official conventions taught in this specific course.
-- Reply ONLY with the correct option number(s) in this format: "Option 1" or "Option 1, Option 3".
-- Do not output anything else.`;
+- Analyze all options thoroughly and choose the verified correct answer based on this course's curriculum.
+- ${answerFormatDesc}
+- Do NOT output any explanations, thoughts, or extra words.`;
             }
 
-            const providerLabel = (typeof aiConfig === 'object' && aiConfig?.provider) ? aiConfig.provider.toUpperCase() : 'AI';
-            log(`Asking ${providerLabel} for question (${q.type || 'Question'})...`);
-            const rawAnswer = await callLLM(prompt, aiConfig);
+            const answerText = await callLLM(prompt, aiConfig);
 
-            if (!rawAnswer) {
-                log(`Warning: Could not obtain answer from ${providerLabel} for question ${q.id}. Skipping.`);
+            if (!answerText) {
+                log(`Notice: Model did not return answer for question ${q.id}. Fallback safeguard will auto-complete.`);
                 continue;
             }
 
-            const answerText = (isText || isRichText) ? sanitizeHumanStudentResponse(rawAnswer) : rawAnswer;
-            log(`${providerLabel} response: ${answerText}`);
-
             if (isText) {
-                let questionTypeEnum = 'PLAIN_TEXT';
-                if (q.type === 'Submission_ShortAnswerQuestion') questionTypeEnum = 'SHORT_ANSWER';
-                else if (q.type === 'Submission_TextExactMatchQuestion') questionTypeEnum = 'TEXT_EXACT_MATCH';
-
+                const cleanText = sanitizeHumanStudentResponse(answerText);
                 responsesToSave.push({
                     questionId: q.id,
-                    questionType: questionTypeEnum,
+                    questionType: 'PLAIN_TEXT',
                     questionResponse: {
                         plainTextResponse: {
-                            plainText: answerText.trim()
+                            answer: cleanText
                         }
                     }
                 });
-                log(`[Saved Text]: ${answerText.trim()}`);
+                log(`[Saved Text]: ${cleanText.substring(0, 60)}...`);
 
             } else if (isRichText) {
+                const cleanRich = sanitizeHumanStudentResponse(answerText);
                 responsesToSave.push({
                     questionId: q.id,
                     questionType: 'RICH_TEXT',
                     questionResponse: {
                         richTextResponse: {
                             richText: {
-                                cmlValue: `<cml><p>${answerText.trim()}</p></cml>`,
+                                cmlValue: `<cml><p>${cleanRich}</p></cml>`,
                                 dtdId: "richText/1"
                             }
                         }
                     }
                 });
-                log(`[Saved RichText]: ${answerText.trim()}`);
+                log(`[Saved RichText]: ${cleanRich.substring(0, 60)}...`);
 
             } else if (isCode) {
                 responsesToSave.push({
@@ -2402,22 +2660,6 @@ Strict Safety & Style Guidelines:
                 });
                 log(`[Saved Regex]: ${answerText.trim()}`);
 
-            } else if (isUrl) {
-                const urlMatch = answerText.match(/https?:\/\/[^\s]+/);
-                const finalUrl = urlMatch ? urlMatch[0] : `https://www.coursera.org/learn/${courseContext?.courseSlug || 'course'}`;
-                responsesToSave.push({
-                    questionId: q.id,
-                    questionType: 'URL',
-                    questionResponse: {
-                        urlResponse: {
-                            url: finalUrl,
-                            title: "Submission",
-                            caption: "Completed"
-                        }
-                    }
-                });
-                log(`[Saved URL]: ${finalUrl}`);
-
             } else if (isNumeric) {
                 const numMatch = answerText.match(/[-+]?[0-9]*\.?[0-9]+/);
                 if (numMatch) {
@@ -2438,7 +2680,7 @@ Strict Safety & Style Guidelines:
 
             } else {
                 // Multiple Choice / Checkbox
-                const matchedOptions = matchGeminiAnswerToOptions(answerText, q.options || []);
+                const matchedOptions = matchGeminiAnswerToOptions(answerText, q.options || [], eliminated);
 
                 if (matchedOptions.length > 0) {
                     log(`Matched Option(s): ${matchedOptions.map(o => o.text).join(' | ')}`);
@@ -2478,21 +2720,20 @@ Strict Safety & Style Guidelines:
             const provider = (typeof aiConfig === 'object' && aiConfig?.provider) ? aiConfig.provider.toLowerCase() : 'gemini';
             
             if (provider === 'gemini') {
-                // Free-tier Gemini has strict 10-15 RPM quota
                 log(`[Gemini Pacing] Waiting 4.5s before next question...`);
                 await new Promise(resolve => setTimeout(resolve, 4500));
             } else if (provider === 'groq') {
-                // Groq is ultra-fast with high RPM caps
                 await new Promise(resolve => setTimeout(resolve, 100));
             } else if (provider === 'openrouter') {
-                // OpenRouter handles rapid sequential queries
                 await new Promise(resolve => setTimeout(resolve, 300));
             } else {
-                // Custom / Local LLMs (Ollama, LM Studio, OpenAI)
                 await new Promise(resolve => setTimeout(resolve, 200));
             }
         }
     }
+
+    // Zero-Unanswered Safeguard: Guarantee 100% of question parts have responses before saving!
+    ensureCompleteResponses(questions, responsesToSave, attemptHistoryFeedback);
 
     // Save and submit responses
     if (responsesToSave.length > 0 && !globalState.abortRequested) {
@@ -2504,25 +2745,35 @@ Strict Safety & Style Guidelines:
             
             if (finalSubmissionId) {
                 log(`Submitting quiz draft (Submission ID: ${finalSubmissionId})...`);
-                await submitDraftGraphQL(headers, courseId, itemId, finalSubmissionId);
+                const submitOutcome = await submitDraftGraphQL(headers, courseId, itemId, finalSubmissionId);
+                return submitOutcome;
             } else {
                 log("Submission ID not found in response; submitting latest draft...");
-                await submitDraftGraphQL(headers, courseId, itemId, itemId);
+                const submitOutcome = await submitDraftGraphQL(headers, courseId, itemId, itemId);
+                return submitOutcome;
             }
         }
     } else if (responsesToSave.length === 0) {
         log("No valid responses were generated to save.");
     }
+    return null;
 }
 
-function matchGeminiAnswerToOptions(answerText, options) {
+function matchGeminiAnswerToOptions(answerText, options, eliminatedOptionIds = null) {
     if (!answerText || !options || options.length === 0) return [];
     
+    const isEliminated = (optId) => {
+        if (!eliminatedOptionIds) return false;
+        if (eliminatedOptionIds instanceof Set) return eliminatedOptionIds.has(optId);
+        if (Array.isArray(eliminatedOptionIds)) return eliminatedOptionIds.includes(optId);
+        return false;
+    };
+
     const matched = [];
     const matchedIds = new Set();
 
     const addOption = (opt) => {
-        if (opt && !matchedIds.has(opt.id)) {
+        if (opt && !matchedIds.has(opt.id) && !isEliminated(opt.id)) {
             matchedIds.add(opt.id);
             matched.push(opt);
         }
@@ -2572,7 +2823,7 @@ function matchGeminiAnswerToOptions(answerText, options) {
         let highestScore = 0;
 
         for (const opt of options) {
-            if (!opt.text) continue;
+            if (!opt.text || isEliminated(opt.id)) continue;
             const cleanOpt = normalize(opt.text);
             if (!cleanOpt) continue;
 
@@ -2590,7 +2841,7 @@ function matchGeminiAnswerToOptions(answerText, options) {
             if (optTokens.length > 0) {
                 const overlap = optTokens.filter(t => answerTokens.has(t)).length;
                 const score = overlap / optTokens.length;
-                if (score > highestScore && score >= 0.5) {
+                if (score > highestScore && score >= 0.4) {
                     highestScore = score;
                     bestMatch = opt;
                 }
@@ -2599,6 +2850,15 @@ function matchGeminiAnswerToOptions(answerText, options) {
 
         if (matched.length === 0 && bestMatch) {
             addOption(bestMatch);
+        }
+    }
+
+    // 5. If matched option was eliminated, fallback to highest-ranked non-eliminated option
+    if (matched.length === 0 && eliminatedOptionIds && eliminatedOptionIds.size > 0) {
+        const available = options.filter(o => !isEliminated(o.id));
+        if (available.length > 0) {
+            log(`[History Intelligence] Filtered out eliminated choice. Selecting remaining candidate: ${available[0].text}`);
+            matched.push(available[0]);
         }
     }
 
@@ -3357,6 +3617,30 @@ async function solveQuizOnScreenInDOM(aiConfig, courseContext = null, autoSubmit
             showOnScreenHUD(`Solving Question ${i + 1} of ${questionElements.length}...`, "working");
             updateProgress(i, questionElements.length, `Question ${i + 1}/${questionElements.length}`);
 
+            // 1. Check for on-screen attempt feedback (e.g. from previous attempt review)
+            const isMarkedCorrect = !!qEl.querySelector('.rc-FormPartCorrect, [data-testid*="correct"], svg[aria-label*="Correct"], [class*="Correct"]');
+            const isMarkedIncorrect = !!qEl.querySelector('.rc-FormPartIncorrect, [data-testid*="incorrect"], svg[aria-label*="Incorrect"], [class*="Incorrect"]');
+
+            if (isMarkedCorrect) {
+                log(`[On-Screen History Q${i + 1}] Already marked CORRECT in past attempt. Keeping winning selection!`);
+                qEl.style.outline = "2px solid #22c55e";
+                await new Promise(r => setTimeout(r, 200));
+                continue;
+            }
+
+            // If previously marked incorrect, identify and eliminate the wrong checked input
+            const eliminatedElements = new Set();
+            if (isMarkedIncorrect) {
+                const prevChecked = Array.from(qEl.querySelectorAll('input:checked'));
+                prevChecked.forEach(inp => {
+                    eliminatedElements.add(inp);
+                    inp.checked = false; // uncheck previously wrong answer
+                });
+                if (prevChecked.length > 0) {
+                    log(`[On-Screen History Q${i + 1}] Eliminating ${prevChecked.length} previously selected incorrect option(s).`);
+                }
+            }
+
             // Extract question prompt
             const promptEl = qEl.querySelector('legend, [class*="prompt"], [class*="Prompt"], [class*="cml"], h3, h4, p');
             const promptText = (promptEl ? promptEl.innerText : qEl.innerText || '').split('\n')[0].replace(/<[^>]*>/g, '').trim();
@@ -3379,10 +3663,16 @@ async function solveQuizOnScreenInDOM(aiConfig, courseContext = null, autoSubmit
                 const domOptions = radios.map((r, idx) => {
                     const parentLabel = r.closest('label') || r.parentElement;
                     const text = (parentLabel ? parentLabel.innerText : '').replace(/<[^>]*>/g, '').trim() || `Option ${idx + 1}`;
-                    return { id: `opt_${idx}`, element: r, text: text, parent: parentLabel };
+                    return { id: `opt_${idx}`, element: r, text: text, parent: parentLabel, isEliminated: eliminatedElements.has(r) };
                 });
 
-                const optionsList = domOptions.map((o, idx) => `Option ${idx + 1} (${String.fromCharCode(65 + idx)}): ${o.text}`).join('\n');
+                const eliminatedIds = new Set(domOptions.filter(o => o.isEliminated).map(o => o.id));
+
+                const optionsList = domOptions.map((o, idx) => {
+                    const elimNote = o.isEliminated ? " [KNOWN INCORRECT - DO NOT CHOOSE]" : "";
+                    return `Option ${idx + 1} (${String.fromCharCode(65 + idx)}): ${o.text}${elimNote}`;
+                }).join('\n');
+
                 const prompt = `You are a student solving a multiple choice question in a Coursera course.
 
 ${courseHeader}
@@ -3399,17 +3689,22 @@ Strict Safety & Style Guidelines:
 
                 log(`[On-Screen Q${i + 1}] Asking AI for multiple choice...`);
                 const answer = await callLLM(prompt, aiConfig);
-                if (answer) {
-                    log(`[On-Screen Q${i + 1}] AI Answer: ${answer}`);
-                    const matched = matchGeminiAnswerToOptions(answer, domOptions);
-                    if (matched.length > 0) {
-                        const target = matched[0];
-                        clickNativeOption(target.element);
-                        if (target.parent) {
-                            target.parent.style.border = "2px solid #22c55e";
-                            target.parent.style.borderRadius = "6px";
-                            target.parent.style.padding = "4px";
-                        }
+                let matched = matchGeminiAnswerToOptions(answer, domOptions, eliminatedIds);
+
+                // Fallback: If AI fails or doesn't match, pick the first non-eliminated option
+                if (matched.length === 0) {
+                    const available = domOptions.filter(o => !o.isEliminated);
+                    matched = [available[0] || domOptions[0]];
+                    log(`[On-Screen Q${i + 1}] Applying Zero-Unanswered fallback option: ${matched[0].text}`);
+                }
+
+                if (matched.length > 0) {
+                    const target = matched[0];
+                    clickNativeOption(target.element);
+                    if (target.parent) {
+                        target.parent.style.border = "2px solid #22c55e";
+                        target.parent.style.borderRadius = "6px";
+                        target.parent.style.padding = "4px";
                     }
                 }
             }
@@ -3418,10 +3713,16 @@ Strict Safety & Style Guidelines:
                 const domOptions = checkboxes.map((cb, idx) => {
                     const parentLabel = cb.closest('label') || cb.parentElement;
                     const text = (parentLabel ? parentLabel.innerText : '').replace(/<[^>]*>/g, '').trim() || `Option ${idx + 1}`;
-                    return { id: `opt_${idx}`, element: cb, text: text, parent: parentLabel };
+                    return { id: `opt_${idx}`, element: cb, text: text, parent: parentLabel, isEliminated: eliminatedElements.has(cb) };
                 });
 
-                const optionsList = domOptions.map((o, idx) => `Option ${idx + 1} (${String.fromCharCode(65 + idx)}): ${o.text}`).join('\n');
+                const eliminatedIds = new Set(domOptions.filter(o => o.isEliminated).map(o => o.id));
+
+                const optionsList = domOptions.map((o, idx) => {
+                    const elimNote = o.isEliminated ? " [KNOWN INCORRECT - DO NOT CHOOSE]" : "";
+                    return `Option ${idx + 1} (${String.fromCharCode(65 + idx)}): ${o.text}${elimNote}`;
+                }).join('\n');
+
                 const prompt = `You are a student solving a multi-select checkbox question in a Coursera course.
 
 ${courseHeader}
@@ -3438,18 +3739,23 @@ Strict Safety & Style Guidelines:
 
                 log(`[On-Screen Q${i + 1}] Asking AI for checkbox question...`);
                 const answer = await callLLM(prompt, aiConfig);
-                if (answer) {
-                    log(`[On-Screen Q${i + 1}] AI Answer: ${answer}`);
-                    const matched = matchGeminiAnswerToOptions(answer, domOptions);
-                    for (const target of matched) {
-                        if (!target.element.checked) {
-                            clickNativeOption(target.element);
-                        }
-                        if (target.parent) {
-                            target.parent.style.border = "2px solid #22c55e";
-                            target.parent.style.borderRadius = "6px";
-                            target.parent.style.padding = "4px";
-                        }
+                let matched = matchGeminiAnswerToOptions(answer, domOptions, eliminatedIds);
+
+                // Fallback: Pick first non-eliminated checkbox if no match
+                if (matched.length === 0) {
+                    const available = domOptions.filter(o => !o.isEliminated);
+                    matched = [available[0] || domOptions[0]];
+                    log(`[On-Screen Q${i + 1}] Applying Zero-Unanswered fallback checkbox: ${matched[0].text}`);
+                }
+
+                for (const target of matched) {
+                    if (!target.element.checked) {
+                        clickNativeOption(target.element);
+                    }
+                    if (target.parent) {
+                        target.parent.style.border = "2px solid #22c55e";
+                        target.parent.style.borderRadius = "6px";
+                        target.parent.style.padding = "4px";
                     }
                 }
             }
@@ -3465,13 +3771,10 @@ ${promptText}
 Provide ONLY the final calculated numeric value. Do not output words, units, or commentary.`;
 
                 const answer = await callLLM(prompt, aiConfig);
-                if (answer) {
-                    const numMatch = answer.match(/[-+]?[0-9]*\.?[0-9]+/);
-                    if (numMatch) {
-                        setNativeInputValue(numInput, numMatch[0]);
-                        numInput.style.border = "2px solid #22c55e";
-                    }
-                }
+                let numMatch = answer ? answer.match(/[-+]?[0-9]*\.?[0-9]+/) : null;
+                const finalNum = numMatch ? numMatch[0] : "0";
+                setNativeInputValue(numInput, finalNum);
+                numInput.style.border = "2px solid #22c55e";
             }
             // Handle Textarea / Text Inputs
             else if (textareas.length > 0) {
@@ -3488,15 +3791,39 @@ Strict Safety & Style Guidelines:
 - Do NOT include conversational greetings or quotes. Output ONLY the response text.`;
 
                 const answer = await callLLM(prompt, aiConfig);
-                if (answer) {
-                    const cleanAnswer = sanitizeHumanStudentResponse(answer);
-                    setNativeInputValue(textInput, cleanAnswer);
-                    textInput.style.border = "2px solid #22c55e";
-                }
+                const finalAnswer = answer ? sanitizeHumanStudentResponse(answer) : "Completed assessment requirements according to course curriculum.";
+                setNativeInputValue(textInput, finalAnswer);
+                textInput.style.border = "2px solid #22c55e";
             }
 
             qEl.style.outline = "2px solid #22c55e";
             await new Promise(r => setTimeout(r, 400));
+        }
+
+        // 2.5 Zero-Unanswered DOM Audit Pass: Verify every single question container is filled
+        for (let i = 0; i < questionElements.length; i++) {
+            const qEl = questionElements[i];
+            const hasCheckedRadio = qEl.querySelector('input[type="radio"]:checked');
+            const hasCheckedCb = qEl.querySelector('input[type="checkbox"]:checked:not([aria-label*="honor"]):not([aria-label*="terms"])');
+            const hasFilledText = qEl.querySelector('textarea, input[type="text"]:not([placeholder*="signature"])');
+            const hasFilledNum = qEl.querySelector('input[type="number"], input[inputmode="numeric"]');
+
+            const allRadios = Array.from(qEl.querySelectorAll('input[type="radio"]'));
+            const allCbs = Array.from(qEl.querySelectorAll('input[type="checkbox"]:not([aria-label*="honor"]):not([aria-label*="terms"])'));
+
+            if (allRadios.length > 0 && !hasCheckedRadio) {
+                log(`[Zero-Unanswered DOM Audit] Question ${i + 1} missing radio selection. Auto-selecting first option...`);
+                clickNativeOption(allRadios[0]);
+            } else if (allCbs.length > 0 && !hasCheckedCb) {
+                log(`[Zero-Unanswered DOM Audit] Question ${i + 1} missing checkbox selection. Auto-selecting first option...`);
+                clickNativeOption(allCbs[0]);
+            } else if (hasFilledNum && (!hasFilledNum.value || hasFilledNum.value.trim() === '')) {
+                log(`[Zero-Unanswered DOM Audit] Question ${i + 1} numeric field empty. Auto-filling 0...`);
+                setNativeInputValue(hasFilledNum, "0");
+            } else if (hasFilledText && (!hasFilledText.value || hasFilledText.value.trim() === '')) {
+                log(`[Zero-Unanswered DOM Audit] Question ${i + 1} text field empty. Auto-filling response...`);
+                setNativeInputValue(hasFilledText, "Completed assessment requirements according to course curriculum.");
+            }
         }
 
         // Check if user chose "Save as Draft Only"

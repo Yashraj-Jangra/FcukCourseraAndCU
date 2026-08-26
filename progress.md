@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 🎯 **React Aria Checkbox Label Trigger & Direct LTI Form Submission (`completeUngradedAppItemInDOM`)**:
+  - Fixed button selector false-matching sidebar module accordions by isolating launch CTA queries to `form button[type="submit"]` and excluding accordion keywords (`module`, `week`, `help`, `close`, `send`).
+  - Added direct React Aria label click dispatcher (`label[for="${cb.id}"]`) to immediately satisfy Coursera's responsible use validation.
+  - Implemented direct `form.requestSubmit()` dispatching the genuine LTI launch transaction.
 - 🩹 **Synthetic Event Dispatcher & React State Synchronization (`setNativeCheckbox` & `clickNativeElement`)**:
   - Implemented `setNativeCheckbox` with prototype descriptor override (`HTMLInputElement.prototype.checked`) to bypass React 16-18 synthetic state trapping and ensure the "I agree to use this app responsibly" checkbox triggers form validation.
   - Implemented `clickNativeElement` dispatching full pointer/mouse/click event sequence (`pointerdown`, `mousedown`, `pointerup`, `mouseup`, `click`).

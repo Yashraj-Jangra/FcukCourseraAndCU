@@ -1201,11 +1201,15 @@ async function completeUngradedAppItemInDOM() {
 
         // Poll up to 6 times (3 seconds total) for dynamic React Aria elements to mount
         for (let attempt = 0; attempt < 6; attempt++) {
-            // A. Standard & React Aria Checkboxes (cds-241, value="agree", etc.)
+            // A. Standard & React Aria Checkboxes (cds-241, cds-193, value="agree", etc.)
             const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"], [aria-checked]'));
             for (const cb of allCheckboxes) {
                 log(`[App / Tool Solver] Setting consent checkbox state (ID: ${cb.id || 'agree'})...`);
                 setNativeCheckbox(cb, true);
+                const parentLabel = cb.closest('label') || document.querySelector(`label[for="${cb.id}"]`) || cb.parentElement;
+                if (parentLabel) {
+                    clickNativeElement(parentLabel);
+                }
                 actionTaken = true;
             }
             
@@ -1220,26 +1224,18 @@ async function completeUngradedAppItemInDOM() {
                 }
             }
 
-            // 2. Locate Launch App CTA
-            const primaryLaunchBtns = Array.from(document.querySelectorAll('button[type="submit"], button[aria-label*="Launch"], button[aria-label*="launch"], .cds-button-primary, [data-testid*="launch"]'));
-            for (const pBtn of primaryLaunchBtns) {
-                const txt = (pBtn.innerText || pBtn.textContent || pBtn.getAttribute('aria-label') || '').toLowerCase();
-                if (txt.includes('launch') || txt.includes('open') || pBtn.type === 'submit') {
-                    targetLaunchBtn = pBtn;
-                    break;
-                }
-            }
+            // 2. Direct Query for Form Submit Launch Button (bypassing sidebar accordion module items)
+            targetLaunchBtn = document.querySelector('form button[type="submit"], button[aria-label*="Launch"], button[aria-label*="launch"], button[data-testid*="launch"]');
 
             if (!targetLaunchBtn) {
-                const allCandidates = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], a[target="_blank"], a[href*="http"], input[type="button"], input[type="submit"], [class*="Button"], [class*="button"]'));
+                const allCandidates = Array.from(document.querySelectorAll('button, a[role="button"], input[type="submit"]'));
                 for (const el of allCandidates) {
                     const text = (el.innerText || el.textContent || '').trim().toLowerCase();
                     const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-                    const testId = (el.getAttribute('data-testid') || el.getAttribute('data-e2e') || '').toLowerCase();
 
-                    if (text === 'next' || text === 'previous' || text.includes('go to next') || text === 'back') continue;
+                    if (text.includes('module') || text.includes('week') || text.includes('help') || text.includes('close') || text.includes('minimize') || text.includes('send') || text === 'next' || text === 'previous' || text.includes('accordion')) continue;
 
-                    if (launchKeywords.some(kw => text === kw || aria.includes(kw) || testId.includes(kw) || text.includes(kw))) {
+                    if (text.includes('launch') || aria.includes('launch') || (el.type === 'submit' && text.includes('app'))) {
                         targetLaunchBtn = el;
                         break;
                     }
@@ -1256,17 +1252,16 @@ async function completeUngradedAppItemInDOM() {
 
             // Guarantee every checkbox is checked = true before submitting
             for (const cb of Array.from(document.querySelectorAll('input[type="checkbox"]'))) {
-                if (!cb.checked) {
-                    setNativeCheckbox(cb, true);
-                }
+                setNativeCheckbox(cb, true);
+                const parentLabel = cb.closest('label') || document.querySelector(`label[for="${cb.id}"]`) || cb.parentElement;
+                if (parentLabel) clickNativeElement(parentLabel);
             }
 
             // Unlock button if disabled
             targetLaunchBtn.disabled = false;
             targetLaunchBtn.removeAttribute('disabled');
             targetLaunchBtn.setAttribute('aria-disabled', 'false');
-            targetLaunchBtn.classList.remove('cds-button-disabled');
-            targetLaunchBtn.classList.remove('disabled');
+            targetLaunchBtn.classList.remove('cds-button-disabled', 'disabled');
 
             // Arm background auto-tab closer to automatically clean up the newly opened lab tab
             chrome.runtime.sendMessage({ action: "arm_lab_tab_closer", durationMs: 12000 }).catch(() => {});
@@ -1281,7 +1276,13 @@ async function completeUngradedAppItemInDOM() {
                     } else {
                         form.submit();
                     }
-                } catch(e) {}
+                } catch(e) {
+                    clickNativeElement(targetLaunchBtn);
+                    targetLaunchBtn.click();
+                }
+            } else {
+                clickNativeElement(targetLaunchBtn);
+                targetLaunchBtn.click();
             }
 
             const href = targetLaunchBtn.getAttribute('href');
@@ -1296,18 +1297,9 @@ async function completeUngradedAppItemInDOM() {
                 } catch(e) {}
             }
 
-            // 2. Dispatch full trusted pointer/mouse event sequence
-            clickNativeElement(targetLaunchBtn);
-            targetLaunchBtn.click();
-
-            // Also click nested label span
-            const innerLabel = targetLaunchBtn.querySelector('.cds-button-label') || targetLaunchBtn.querySelector('span');
-            if (innerLabel) {
-                try { innerLabel.click(); } catch(e) {}
-            }
             actionTaken = true;
 
-            // 3. Keep session active for 2s so Coursera registers launch callback
+            // 2. Keep session active for 2s so Coursera registers launch callback
             log(`[App / Tool Solver] Keeping session active for token registration...`);
             for (let sec = 2; sec > 0; sec--) {
                 showOnScreenHUD(`Registering App Tokens (${sec}s)...`, "working");

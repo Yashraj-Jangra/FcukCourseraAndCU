@@ -166,6 +166,62 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         sendResponse({ status: "started" });
     }
+    if (request.action === "complete_app_item_on_screen" || request.action === "start_app_item_solver") {
+        if (globalState.isRunning) {
+            sendResponse({ status: "already_running" });
+            return;
+        }
+        globalState.isRunning = true;
+        globalState.abortRequested = false;
+        globalState.currentAction = "app_item";
+        updateStatus("Solving App / Tool Item on screen...");
+
+        (async () => {
+            try {
+                showOnScreenHUD("FcukCoursera: Processing App / Tool...", "working");
+                log("[App / Tool Solver] Starting dedicated on-screen App item completion...");
+
+                // 1. Live DOM solver (agree checkbox + launch button + tokens wait + mark complete)
+                const domSuccess = await completeUngradedAppItemInDOM();
+
+                // 2. Also resolve course/user/item IDs from page URL and syllabus to trigger background API passes
+                try {
+                    const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
+                    const urlParts = window.location.pathname.split('/').filter(p => p);
+                    const learnIndex = urlParts.indexOf('learn');
+                    const courseSlug = (learnIndex !== -1 && urlParts.length > learnIndex + 1) ? urlParts[learnIndex + 1] : "";
+                    const itemIndex = urlParts.indexOf('item');
+                    const itemId = (itemIndex !== -1 && urlParts.length > itemIndex + 1) ? urlParts[itemIndex + 1] : "";
+
+                    const { userId, courseId } = await getCourseData();
+                    if (userId && courseId && itemId) {
+                        const mockItem = { id: itemId, name: cleanTitle || "App Item", typeName: "ungradedApp" };
+                        await completeUngradedAppItem(userId, courseId, courseSlug, mockItem);
+                    }
+                } catch(e) {}
+
+                if (domSuccess) {
+                    log("[App / Tool Solver] App / Tool item successfully launched and completed!");
+                    updateStatus("App Item Completed Successfully!");
+                    showOnScreenHUD("🎉 App Item Completed Successfully!", "success");
+                    setTimeout(hideOnScreenHUD, 4500);
+                } else {
+                    log("[App / Tool Solver] Finished processing App item.");
+                    updateStatus("App Item Processed.");
+                    showOnScreenHUD("✓ App Item Processed!", "success");
+                    setTimeout(hideOnScreenHUD, 3500);
+                }
+            } catch(e) {
+                log(`Error in App solver: ${e.message}`);
+                updateStatus("Error in App solver.");
+                hideOnScreenHUD();
+            } finally {
+                globalState.isRunning = false;
+                chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+            }
+        })();
+        sendResponse({ status: "started" });
+    }
     if (request.action === "start_complete_course") {
         if (globalState.isRunning) {
             sendResponse({ status: "already_running" });

@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 📱 **Dedicated "Complete App Item" Popup Action Button (`#appItemBtn`)**:
+  - Added a dedicated green action button **"📱 Complete App Item"** directly in the extension popup grid alongside **"🎯 Solve on Screen"**.
+  - Allows users to individually test and complete any Ungraded App Assignment, External Tool, Workspace, or Lab page with a single click.
+  - Automatically handles consent checkboxes, triggers app launch in browser tab, holds 5s token registration, clicks completion buttons, and records multi-schema passes.
 - 📱 **Dedicated Live On-Screen App / Tool Solver (`completeUngradedAppItemInDOM`)**:
   - Upgraded the on-screen solver (`startOnScreenQuizSolverProcess`) to automatically detect when the page is an Ungraded App Assignment, Tool, Lab, or Dialogue item when no standard quiz questions exist.
   - Automatically clicks all "I agree" / Terms / third-party consent checkboxes on page.

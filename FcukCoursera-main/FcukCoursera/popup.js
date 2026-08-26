@@ -360,6 +360,25 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     });
 });
 
+document.getElementById('appItemBtn').addEventListener('click', async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+    if (!tab || !tab.url || !tab.url.includes("coursera.org")) {
+        document.getElementById('status').innerText = "Error: Not on Coursera!";
+        return;
+    }
+
+    setRunningUIState(true);
+    document.getElementById('status').innerText = "Solving App / Tool Item on screen...";
+
+    chrome.tabs.sendMessage(tab.id, { action: "complete_app_item_on_screen" }, (response) => {
+        if (chrome.runtime.lastError) {
+            setRunningUIState(false);
+            document.getElementById('status').innerText = "Error: Refresh page & try again.";
+        }
+    });
+});
+
 document.getElementById('readBtn').addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     

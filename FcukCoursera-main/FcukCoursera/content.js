@@ -1130,7 +1130,10 @@ function clickNativeElement(element) {
 function setNativeCheckbox(input, targetChecked = true) {
     if (!input) return;
     try {
-        const isCurrentlyChecked = !!input.checked;
+        const parentLabel = document.querySelector(`label[for="${input.id}"]`) || input.closest('label') || input.parentElement;
+        if (parentLabel && typeof parentLabel.click === 'function') {
+            parentLabel.click();
+        }
 
         // 1. Bypass React's internal state tracker using prototype descriptor
         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
@@ -1144,17 +1147,7 @@ function setNativeCheckbox(input, targetChecked = true) {
         input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
         input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
-        // 3. If turning on from false, click the label or container as well
-        if (!isCurrentlyChecked && targetChecked) {
-            const parentLabel = input.closest('label') || document.querySelector(`label[for="${input.id}"]`);
-            if (parentLabel) {
-                clickNativeElement(parentLabel);
-            } else {
-                clickNativeElement(input);
-            }
-        }
-
-        // 4. Update aria attributes
+        // 3. Update aria attributes
         input.setAttribute('aria-checked', targetChecked ? 'true' : 'false');
         input.setAttribute('data-indeterminate', 'false');
         input.removeAttribute('aria-invalid');
@@ -1499,19 +1492,30 @@ async function processCurrentAppQueueStep() {
  */
 async function startCompleteAllAppItemsProcess() {
     try {
+        const { itemId: currentActiveItemId, courseSlug: currentCourseSlug } = extractCourseAndItemIdFromURL(window.location.href);
+        const hasLaunchForm = !!document.querySelector('form button[type="submit"], button[aria-label*="Launch"], button[aria-label*="launch"]');
+        const isAppPageUrl = window.location.href.includes('Lti') || window.location.href.includes('App') || window.location.href.includes('workspace') || window.location.href.includes('lab');
+
+        // 1. If currently on an active App/Lab page, solve and launch on-screen immediately!
+        if (hasLaunchForm || isAppPageUrl) {
+            log("[App Solver] Active App/Lab page detected. Solving on-screen immediately...");
+            showOnScreenHUD("FcukCoursera: Launching Active App...", "working");
+            await completeUngradedAppItemInDOM();
+        }
+
         log("Scanning course syllabus for App / LTI / Lab items...");
         updateStatus("Scanning course for App / Lab items...");
         showOnScreenHUD("FcukCoursera: Scanning Course for App / Lab Items...", "working");
 
-        // 1. Fetch course data & syllabus
+        // 2. Fetch course data & syllabus
         const { userId, courseId, courseSlug, courseTitle, allItems, syllabusData } = await getCourseData();
         log(`Resolved Course: "${courseTitle}" (${courseSlug}), User ID: ${userId}`);
 
-        // 2. Pre-fetch completed items to skip already-passed apps
+        // 3. Pre-fetch completed items to skip already-passed apps
         const progressData = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
         log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} completed items in syllabus.`);
 
-        // 3. Filter for ALL App / LTI / Lab / Workspace / Tool items across all modules
+        // 4. Filter for ALL App / LTI / Lab / Workspace / Tool items across all modules
         const appItems = allItems.filter(item => isAppOrToolItem(item));
 
         log(`Found ${appItems.length} total App / Lab / Tool items in course "${courseTitle}".`);

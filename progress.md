@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 🌐 **Canonical URL Routing & 404 Recovery (`targetUrl` & `checkAndHandleAppPrepError`)**:
+  - Eliminated invalid fabricated routes (`/singlePageApp/`, `/workspace/`, `/ungradedLab/`) that caused Coursera's *"Looks like you found a page that does not exist or the URL was mistyped"* 404 error page.
+  - Restricted direct routes strictly to valid Coursera LTI paths (`/ungradedLti/`, `/gradedLti/`) and routed all other items to Coursera's universal canonical item path (`/home/item/:id`).
+  - Added 404 error detection in `checkAndHandleAppPrepError` to automatically redirect any misrouted tab to `/home/item/:id` with zero stalling.
 - ⏱️ **Strict Chronological Master Course Queue Runner (`processMasterCourseQueueStep`)**:
   - Re-engineered "Complete Course (All-in-One)" into a unified chronological master state machine that traverses items in exact syllabus sequence ($\text{Video} \rightarrow \text{Reading} \rightarrow \text{App/Lab (on-screen)} \rightarrow \text{Quiz}$).
   - Solves locked prerequisite lab items *before* attempting subsequent quizzes to completely eliminate quiz lock errors.

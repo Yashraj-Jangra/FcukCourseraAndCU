@@ -484,8 +484,7 @@ async function startCompleteCourseProcess(aiConfig) {
         // 4. Build master chronological queue preserving exact syllabus order
         const masterQueue = uncompletedItems.map(it => {
             const typePath = it.typeName || 'item';
-            const directTypes = ['ungradedLti', 'gradedLti', 'ungradedApp', 'gradedApp', 'singlePageApp', 'workspace', 'ungradedLab', 'gradedLab'];
-            const targetUrl = directTypes.includes(typePath)
+            const targetUrl = (typePath === 'ungradedLti' || typePath === 'gradedLti')
                 ? `https://www.coursera.org/learn/${courseSlug}/${typePath}/${it.id}`
                 : `https://www.coursera.org/learn/${courseSlug}/home/item/${it.id}`;
             return {
@@ -1517,7 +1516,7 @@ async function completePracticeLabOrLti(userId, courseId, courseSlug, item) {
 }
 
 /**
- * Automated Recovery for Coursera LTI Error: "We couldn't prepare the app. Please refresh the page and try again."
+ * Automated Recovery for Coursera LTI Error: "We couldn't prepare the app" and 404 Not Found Routes
  */
 async function checkAndHandleAppPrepError(item, courseSlug) {
     try {
@@ -1525,6 +1524,22 @@ async function checkAndHandleAppPrepError(item, courseSlug) {
         const alertEl = document.querySelector('.cds-alert, [role="alert"], [class*="alert"]');
         const alertText = alertEl ? (alertEl.innerText || '').toLowerCase() : '';
         
+        // 1. Detect Coursera 404 Page: "Looks like you found a page that does not exist or the URL was mistyped"
+        const has404Error = bodyText.includes("page that does not exist") || 
+                            bodyText.includes("does not exist or the url was mistyped") || 
+                            bodyText.includes("url was mistyped") || 
+                            bodyText.includes("page not found");
+
+        if (has404Error) {
+            log(`[App Auto-Recovery] Detected Coursera 404 Page. Redirecting to canonical item route: /learn/${courseSlug}/home/item/${item.id}...`);
+            showOnScreenHUD("404 Recovered: Redirecting to Item...", "warning");
+            const canonicalUrl = `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`;
+            await new Promise(r => setTimeout(r, 600));
+            window.location.href = canonicalUrl;
+            return true;
+        }
+
+        // 2. Detect Coursera App Preparation Glitch
         const hasPrepError = bodyText.includes("couldn't prepare the app") || 
                              bodyText.includes("could not prepare the app") || 
                              alertText.includes("prepare the app") ||
@@ -1744,8 +1759,7 @@ async function startCompleteAllAppItemsProcess() {
         const queueData = {
             activeAppQueue: itemsToProcess.map(it => {
                 const typePath = it.typeName || 'ungradedLti';
-                const directTypes = ['ungradedLti', 'gradedLti', 'ungradedApp', 'gradedApp', 'singlePageApp', 'workspace', 'ungradedLab', 'gradedLab'];
-                const targetUrl = directTypes.includes(typePath)
+                const targetUrl = (typePath === 'ungradedLti' || typePath === 'gradedLti')
                     ? `https://www.coursera.org/learn/${courseSlug}/${typePath}/${it.id}`
                     : `https://www.coursera.org/learn/${courseSlug}/home/item/${it.id}`;
                 return {

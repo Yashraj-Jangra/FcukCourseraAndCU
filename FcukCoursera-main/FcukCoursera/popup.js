@@ -1,10 +1,21 @@
 function setRunningUIState(isRunning) {
-    document.getElementById('startBtn').disabled = isRunning;
-    document.getElementById('readBtn').disabled = isRunning;
-    document.getElementById('quizBtn').disabled = isRunning;
+    const startBtn = document.getElementById('startBtn');
+    if (startBtn) startBtn.disabled = isRunning;
+
+    const readBtn = document.getElementById('readBtn');
+    if (readBtn) readBtn.disabled = isRunning;
+
+    const quizBtn = document.getElementById('quizBtn');
+    if (quizBtn) quizBtn.disabled = isRunning;
+
     const onScreenBtn = document.getElementById('quizOnScreenBtn');
     if (onScreenBtn) onScreenBtn.disabled = isRunning;
-    document.getElementById('completeBtn').disabled = isRunning;
+
+    const appBtn = document.getElementById('appItemBtn');
+    if (appBtn) appBtn.disabled = isRunning;
+
+    const completeBtn = document.getElementById('completeBtn');
+    if (completeBtn) completeBtn.disabled = isRunning;
     
     const stopBtn = document.getElementById('stopBtn');
     if (stopBtn) {

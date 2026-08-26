@@ -136,7 +136,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             globalState.abortRequested = true;
             log("Stop requested. Cancelling ongoing operation...");
             updateStatus("Stopping...");
-            chrome.storage.local.remove(['activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId']).catch(() => {});
+            chrome.storage.local.remove([
+                'masterCourseQueue', 'masterCourseIndex', 'masterAiConfig', 
+                'masterCourseSlug', 'masterCourseTitle', 'masterUserId', 
+                'masterCourseId', 'masterModules', 'masterManualAttention',
+                'activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId'
+            ]).catch(() => {});
             hideOnScreenHUD();
             sendResponse({ status: "stopping" });
         } else {
@@ -443,190 +448,260 @@ async function fetchCourseProgressState(userId, courseId, courseSlug = null, syl
 
 async function startCompleteCourseProcess(aiConfig) {
     try {
+        log("Initializing Full Course Chronological Auto-Completion...");
+        updateStatus("Scanning course syllabus in order...");
+        showOnScreenHUD("FcukCoursera: Initializing Chronological Course Solver...", "working");
+
+        // 1. Fetch course data & syllabus
         const { userId, courseId, courseSlug, courseTitle, allItems, modules, syllabusData } = await getCourseData();
-        
-        log(`Starting Full Course Auto-Completion for "${courseTitle}". Found ${allItems.length} items across ${modules.length} modules.`);
-        log("[Full Course Solver] Auto-accepting Terms & Conditions, signing Honor Code, and performing final submission for all assessments.");
-        
-        // Fetch real-time progress state to avoid reattempting already-passed items
+        log(`Resolved Course: "${courseTitle}" (${courseSlug}), User ID: ${userId}`);
+        log(`Total syllabus items: ${allItems.length} across ${modules.length} modules.`);
+
+        // 2. Pre-fetch completed items to skip already-passed items
         const progressData = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
         log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items in this course.`);
 
-        updateProgress(0, allItems.length, "Starting...");
+        // 3. Filter strictly for uncompleted items in exact natural syllabus sequence
+        const uncompletedItems = allItems.filter(item => {
+            if (progressData.completedItemIds.has(item.id)) return false;
+            if (progressData.passedQuizScores && progressData.passedQuizScores[item.id] !== undefined) return false;
+            return true;
+        });
 
-        let completedCount = 0;
-        const manualAttentionItems = [];
-        
-        for (let i = 0; i < allItems.length; i++) {
-            if (globalState.abortRequested) {
-                log("Course completion stopped by user.");
-                break;
-            }
+        log(`Queue contains ${uncompletedItems.length} uncompleted item(s) to solve in chronological order.`);
 
-            const item = allItems[i];
-            const courseContext = {
-                courseSlug: courseSlug,
-                courseTitle: courseTitle,
-                assignmentName: item.name,
-                moduleName: item.moduleName || ""
+        if (uncompletedItems.length === 0) {
+            log(`🎉 All ${allItems.length} items in "${courseTitle}" are already completed! Zero items need solving.`);
+            updateProgress(allItems.length, allItems.length, "Done!");
+            updateStatus("All course items already completed!");
+            showOnScreenHUD("🎉 Entire Course Already 100% Completed!", "success");
+            await generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules, []);
+            chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+            setTimeout(hideOnScreenHUD, 3500);
+            return;
+        }
+
+        // 4. Build master chronological queue preserving exact syllabus order
+        const masterQueue = uncompletedItems.map(it => {
+            const typePath = it.typeName || 'item';
+            const directTypes = ['ungradedLti', 'gradedLti', 'ungradedApp', 'gradedApp', 'singlePageApp', 'workspace', 'ungradedLab', 'gradedLab'];
+            const targetUrl = directTypes.includes(typePath)
+                ? `https://www.coursera.org/learn/${courseSlug}/${typePath}/${it.id}`
+                : `https://www.coursera.org/learn/${courseSlug}/home/item/${it.id}`;
+            return {
+                id: it.id,
+                name: it.name,
+                typeName: it.typeName,
+                slug: it.slug,
+                moduleId: it.moduleId,
+                moduleName: it.moduleName,
+                isLocked: it.isLocked,
+                lockStatus: it.lockStatus,
+                url: targetUrl
             };
+        });
 
-            const progressMsg = `[${i + 1}/${allItems.length}] ${item.typeName || 'Item'}: ${item.name}`;
-            updateStatus(progressMsg);
-            updateProgress(i, allItems.length, item.name);
+        const queueData = {
+            masterCourseQueue: masterQueue,
+            masterCourseIndex: 0,
+            masterAiConfig: aiConfig,
+            masterCourseSlug: courseSlug,
+            masterCourseTitle: courseTitle,
+            masterUserId: userId,
+            masterCourseId: courseId,
+            masterModules: modules,
+            masterManualAttention: []
+        };
 
-            // 1. Skip already completed items
-            if (progressData.completedItemIds.has(item.id)) {
-                log(`[Already Completed (✓)] ${item.name} (${item.moduleName || 'General'}) - Skipping.`);
-                completedCount++;
-                continue;
-            }
+        await chrome.storage.local.set(queueData);
 
-            // 2. Skip previously passed quizzes
-            if (progressData.passedQuizScores && progressData.passedQuizScores[item.id] !== undefined) {
-                log(`[Already Passed (✓)] ${item.name} (${item.moduleName || 'General'}) - Score: ${progressData.passedQuizScores[item.id]}%. Skipping to preserve attempt quota.`);
-                completedCount++;
-                continue;
-            }
+        // Begin step 1 of master chronological queue
+        await processMasterCourseQueueStep();
 
-            const category = classifyItemType(item);
+    } catch (e) {
+        log("Error in Complete Course initialization: " + e.message);
+        updateStatus("Error occurred. Check logs.");
+        showOnScreenHUD(`Error: ${e.message}`, "error");
+        chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+        setTimeout(hideOnScreenHUD, 4000);
+    }
+}
 
-            // 3. Graceful check for Peer Review & Locked items
-            const isPeer = (category === 'peer_review');
-            const isLocked = item.isLocked === true || item.lockStatus === 'LOCKED';
-            
-            if (isPeer) {
-                log(`[⚠️ Manual Attention Needed] ${item.name} (${item.moduleName}): Peer-graded assignment requires peer submissions and reviews.`);
-                manualAttentionItems.push({
-                    id: item.id,
-                    name: item.name,
-                    moduleName: item.moduleName || 'General',
-                    typeName: item.typeName || 'Peer Review',
-                    reason: 'Peer-graded assignment requires manual submission & peer reviews.',
-                    itemUrl: `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`
-                });
-                continue;
-            }
+/**
+ * Executes a single step of the persistent Master Chronological Course Queue.
+ * Follows exact natural syllabus order: Video -> Reading -> App/Lab (on-screen) -> Quiz.
+ */
+async function processMasterCourseQueueStep() {
+    try {
+        const data = await chrome.storage.local.get([
+            'masterCourseQueue', 'masterCourseIndex', 'masterAiConfig', 
+            'masterCourseSlug', 'masterCourseTitle', 'masterUserId', 
+            'masterCourseId', 'masterModules', 'masterManualAttention'
+        ]);
 
-            if (isLocked) {
-                log(`[⚠️ Locked Item] ${item.name} (${item.moduleName}): Prerequisite item(s) in earlier modules not yet met.`);
-                manualAttentionItems.push({
-                    id: item.id,
-                    name: item.name,
-                    moduleName: item.moduleName || 'General',
-                    typeName: item.typeName || 'Locked Item',
-                    reason: 'Assessment locked bcz prerequisite item(s) in earlier modules require completion.',
-                    itemUrl: `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`
-                });
-                continue;
-            }
-            
-            try {
-                let result = false;
-                
-                if (category === 'lecture') {
-                    result = await completeSingleVideo(userId, courseId, courseSlug, item.id);
-                    if (result) log(`[Video Completed] ${item.name}`);
-                } 
-                else if (category === 'supplement') {
-                    result = await completeSingleReading(userId, courseId, courseSlug, item.id);
-                    if (result) log(`[Reading Completed] ${item.name}`);
-                }
-                else if (category === 'discussion') {
-                    log(`[Discussion Prompt Found] ${item.name}`);
-                    result = await completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig, courseContext);
-                }
-                else if (category === 'dialogue') {
-                    log(`[Dialogue Simulation Found] ${item.name}`);
-                    result = await completeDialogueItem(userId, courseId, courseSlug, item, aiConfig, courseContext);
-                }
-                else if (category === 'app_item' || category === 'lab' || isAppOrToolItem(item)) {
-                    log(`[App / LTI / Lab Item Found] ${item.name}`);
-                    if (window.location.href.includes(item.id)) {
-                        await completeUngradedAppItemInDOM();
-                    }
-                    result = await completeUngradedAppItem(userId, courseId, courseSlug, item);
-                }
-                else if (category === 'interactive') {
-                    log(`[Interactive Item Found] ${item.name}`);
-                    result = await completeGenericInteractiveItem(userId, courseId, courseSlug, item, aiConfig);
-                }
-                else if (category === 'quiz_assignment') {
-                    log(`[Quiz / Practice Assignment Found] ${item.name}`);
-                    await processQuizItem(userId, courseId, item, aiConfig, courseContext);
-                    result = true;
-                }
-                else {
-                    // Fallback for unknown item types
-                    log(`[Processing Item: ${item.typeName || 'Item'}] ${item.name}`);
-                    await processQuizItem(userId, courseId, item, aiConfig, courseContext);
-                    result = true;
-                }
-
-                if (result) {
-                    completedCount++;
-                    await new Promise(r => setTimeout(r, 100));
-                }
-
-            } catch (e) {
-                log(`[Error] ${item.name}: ${e.message}`);
-            }
+        if (!data.masterCourseQueue || !Array.isArray(data.masterCourseQueue) || data.masterCourseQueue.length === 0) {
+            return;
         }
 
         if (globalState.abortRequested) {
+            log("[Master Runner] Process cancelled by user. Clearing master queue...");
+            await chrome.storage.local.remove([
+                'masterCourseQueue', 'masterCourseIndex', 'masterAiConfig', 
+                'masterCourseSlug', 'masterCourseTitle', 'masterUserId', 
+                'masterCourseId', 'masterModules', 'masterManualAttention'
+            ]);
+            hideOnScreenHUD();
             updateStatus("Process aborted.");
             chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
             return;
         }
 
-        // Check for any remaining uncompleted App / Lab items that require on-screen series navigation
-        const updatedProgress = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
-        const remainingUncompletedApps = allItems.filter(it => isAppOrToolItem(it) && !updatedProgress.completedItemIds.has(it.id));
+        const currentIndex = data.masterCourseIndex || 0;
+        const total = data.masterCourseQueue.length;
+        const userId = data.masterUserId;
+        const courseId = data.masterCourseId;
+        const courseSlug = data.masterCourseSlug;
+        const courseTitle = data.masterCourseTitle;
+        const aiConfig = data.masterAiConfig;
+        const modules = data.masterModules || [];
+        const manualAttentionItems = data.masterManualAttention || [];
 
-        if (remainingUncompletedApps.length > 0 && !globalState.abortRequested) {
-            log(`\n========================================`);
-            log(`[All-in-One Solver] Seamlessly transitioning to On-Screen App Completion for ${remainingUncompletedApps.length} remaining App / Lab item(s) in series...`);
-            log(`========================================`);
-            updateStatus(`Completing ${remainingUncompletedApps.length} App items in series...`);
-            showOnScreenHUD(`Completing ${remainingUncompletedApps.length} Remaining App Items in Series...`, "working");
-
-            // Queue persistent multi-page app queue in series
-            const queueData = {
-                activeAppQueue: remainingUncompletedApps.map(it => {
-                    const typePath = it.typeName || 'ungradedLti';
-                    const directTypes = ['ungradedLti', 'gradedLti', 'ungradedApp', 'gradedApp', 'singlePageApp', 'workspace', 'ungradedLab', 'gradedLab'];
-                    const targetUrl = directTypes.includes(typePath)
-                        ? `https://www.coursera.org/learn/${courseSlug}/${typePath}/${it.id}`
-                        : `https://www.coursera.org/learn/${courseSlug}/home/item/${it.id}`;
-                    return {
-                        id: it.id,
-                        name: it.name,
-                        typeName: typePath,
-                        url: targetUrl
-                    };
-                }),
-                appQueueIndex: 0,
-                appCourseSlug: courseSlug,
-                appCourseTitle: courseTitle,
-                appUserId: userId,
-                appCourseId: courseId
-            };
-
-            await chrome.storage.local.set(queueData);
-            await processCurrentAppQueueStep();
+        // When all items in master queue are completed:
+        if (currentIndex >= total) {
+            log(`\n🎉 [Master Runner] Successfully completed all ${total} items across the entire course "${courseTitle}" in chronological order!`);
+            updateProgress(total, total, "Done!");
+            updateStatus(`Done! Completed all ${total} items in course.`);
+            showOnScreenHUD(`🎉 Entire Course Completed (100%)!`, "success");
+            
+            await generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, data.masterCourseQueue, modules, manualAttentionItems);
+            
+            await chrome.storage.local.remove([
+                'masterCourseQueue', 'masterCourseIndex', 'masterAiConfig', 
+                'masterCourseSlug', 'masterCourseTitle', 'masterUserId', 
+                'masterCourseId', 'masterModules', 'masterManualAttention'
+            ]);
+            setTimeout(hideOnScreenHUD, 4500);
+            chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
             return;
         }
 
-        updateProgress(allItems.length, allItems.length, "Done!");
-        updateStatus(`Done! Processed ${allItems.length} items.`);
-        // Generate and output comprehensive course summary report with manual attention items
-        await generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules, manualAttentionItems);
-        chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+        const item = data.masterCourseQueue[currentIndex];
+        const category = classifyItemType(item);
+        const courseContext = {
+            courseSlug: courseSlug,
+            courseTitle: courseTitle,
+            assignmentName: item.name,
+            moduleName: item.moduleName || ""
+        };
 
-    } catch (e) {
-        log("Error: " + e.message);
-        updateStatus("Error occurred. Check logs.");
-        chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+        const progressMsg = `[${currentIndex + 1}/${total}] ${item.moduleName ? item.moduleName + ': ' : ''}${item.name}`;
+        log(`\n----------------------------------------`);
+        log(`[Master Runner] Step (${currentIndex + 1}/${total}): ${item.name} (${item.typeName || category}, ID: ${item.id})`);
+        log(`----------------------------------------`);
+        
+        updateStatus(progressMsg);
+        updateProgress(currentIndex, total, item.name);
+        showOnScreenHUD(`[${currentIndex + 1}/${total}] Solving: ${item.name.substring(0, 30)}...`, "working");
+
+        // 1. Handle Peer Review & Locked items gracefully
+        if (category === 'peer_review') {
+            log(`[⚠️ Manual Attention Needed] ${item.name} (${item.moduleName}): Peer-graded assignment requires manual peer submission.`);
+            manualAttentionItems.push({
+                id: item.id,
+                name: item.name,
+                moduleName: item.moduleName || 'General',
+                typeName: item.typeName || 'Peer Review',
+                reason: 'Peer-graded assignment requires manual submission & peer reviews.',
+                itemUrl: `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`
+            });
+            await chrome.storage.local.set({ 
+                masterCourseIndex: currentIndex + 1,
+                masterManualAttention: manualAttentionItems
+            });
+            return processMasterCourseQueueStep();
+        }
+
+        // 2. Handle App / Lab / LTI items in series (Navigates to live lab page, solves on-screen, closes tab)
+        if (category === 'app_item' || isAppOrToolItem(item)) {
+            const isCurrentPage = window.location.href.includes(item.id);
+
+            // If not on this item's page, navigate to it!
+            if (!isCurrentPage) {
+                log(`[Master Runner] Navigating to App/Lab page: ${item.url}`);
+                showOnScreenHUD(`📱 Opening Lab (${currentIndex + 1}/${total}): ${item.name.substring(0, 25)}...`, "working");
+                await new Promise(r => setTimeout(r, 200));
+                window.location.href = item.url;
+                return;
+            }
+
+            // On item page: Check for Coursera preparation glitch and auto-recover if detected
+            const wasGlitchHandled = await checkAndHandleAppPrepError(item, courseSlug);
+            if (wasGlitchHandled) return;
+
+            // Run live on-screen solver
+            await completeUngradedAppItemInDOM();
+            await completeUngradedAppItem(userId, courseId, courseSlug, item);
+
+            // Advance index
+            const nextIndex = currentIndex + 1;
+            await chrome.storage.local.set({ masterCourseIndex: nextIndex });
+
+            if (nextIndex < total) {
+                const nextItem = data.masterCourseQueue[nextIndex];
+                const nextCategory = classifyItemType(nextItem);
+                
+                if (nextCategory === 'app_item' || isAppOrToolItem(nextItem)) {
+                    log(`[Master Runner] Lab finished. Navigating to next item (Lab): ${nextItem.name}...`);
+                    await new Promise(r => setTimeout(r, 400));
+                    window.location.href = nextItem.url;
+                } else {
+                    log(`[Master Runner] Lab finished. Continuing immediately to next item: ${nextItem.name}...`);
+                    await new Promise(r => setTimeout(r, 400));
+                    return processMasterCourseQueueStep();
+                }
+            } else {
+                return processMasterCourseQueueStep();
+            }
+            return;
+        }
+
+        // 3. Handle Non-App items (Video, Reading, Discussion, Dialogue, Quiz) sequentially in place
+        let result = false;
+        try {
+            if (category === 'lecture') {
+                result = await completeSingleVideo(userId, courseId, courseSlug, item.id);
+                if (result) log(`[Video Completed] ${item.name}`);
+            } else if (category === 'supplement') {
+                result = await completeSingleReading(userId, courseId, courseSlug, item.id);
+                if (result) log(`[Reading Completed] ${item.name}`);
+            } else if (category === 'discussion') {
+                result = await completeDiscussionPrompt(userId, courseId, courseSlug, item, aiConfig, courseContext);
+            } else if (category === 'dialogue') {
+                result = await completeDialogueItem(userId, courseId, courseSlug, item, aiConfig, courseContext);
+            } else if (category === 'interactive') {
+                result = await completeGenericInteractiveItem(userId, courseId, courseSlug, item, aiConfig);
+            } else if (category === 'quiz_assignment') {
+                await processQuizItem(userId, courseId, item, aiConfig, courseContext);
+                result = true;
+            } else {
+                await processQuizItem(userId, courseId, item, aiConfig, courseContext);
+                result = true;
+            }
+        } catch(err) {
+            log(`[Notice] ${item.name}: ${err.message}`);
+        }
+
+        // Advance to next step in master queue
+        const nextIndex = currentIndex + 1;
+        await chrome.storage.local.set({ masterCourseIndex: nextIndex });
+        await new Promise(r => setTimeout(r, 80));
+        return processMasterCourseQueueStep();
+
+    } catch(e) {
+        log(`Error in Master Course Runner: ${e.message}`);
+        updateStatus("Error occurred in Master runner.");
+        showOnScreenHUD(`Error: ${e.message}`, "error");
+        setTimeout(hideOnScreenHUD, 4000);
     }
 }
 
@@ -1442,6 +1517,48 @@ async function completePracticeLabOrLti(userId, courseId, courseSlug, item) {
 }
 
 /**
+ * Automated Recovery for Coursera LTI Error: "We couldn't prepare the app. Please refresh the page and try again."
+ */
+async function checkAndHandleAppPrepError(item, courseSlug) {
+    try {
+        const bodyText = (document.body.innerText || '').toLowerCase();
+        const alertEl = document.querySelector('.cds-alert, [role="alert"], [class*="alert"]');
+        const alertText = alertEl ? (alertEl.innerText || '').toLowerCase() : '';
+        
+        const hasPrepError = bodyText.includes("couldn't prepare the app") || 
+                             bodyText.includes("could not prepare the app") || 
+                             alertText.includes("prepare the app") ||
+                             alertText.includes("refresh the page");
+
+        if (hasPrepError) {
+            const retryKey = `app_prep_retry_${item.id}`;
+            const storage = await chrome.storage.local.get([retryKey]);
+            const count = storage[retryKey] || 0;
+
+            if (count === 0) {
+                log(`[App Auto-Recovery] Detected Coursera 'We couldn't prepare the app' glitch. Refreshing page for auto-recovery (Attempt 1)...`);
+                showOnScreenHUD("⚠️ App Glitch: Auto-Refreshing Page...", "warning");
+                await chrome.storage.local.set({ [retryKey]: 1 });
+                await new Promise(r => setTimeout(r, 1200));
+                window.location.reload();
+                return true;
+            } else {
+                log(`[App Auto-Recovery] App glitch persisted after reload. Falling back to canonical router...`);
+                await chrome.storage.local.remove([retryKey]);
+                const canonicalUrl = `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`;
+                if (!window.location.href.includes('/home/item/')) {
+                    showOnScreenHUD("Falling back to item router...", "warning");
+                    await new Promise(r => setTimeout(r, 600));
+                    window.location.href = canonicalUrl;
+                    return true;
+                }
+            }
+        }
+    } catch(e) {}
+    return false;
+}
+
+/**
  * Executes a single step of the persistent multi-page App completion queue.
  * Navigates tab to the item's live URL, runs on-screen solver, and advances to next.
  */
@@ -1465,6 +1582,7 @@ async function processCurrentAppQueueStep() {
         // Check if all items in queue are completed
         if (currentIndex >= total) {
             log(`\n🎉 [App Navigator] Successfully completed all ${total} App / Lab items in "${data.appCourseTitle || 'Course'}"!`);
+            updateProgress(total, total, "Done!");
             updateStatus(`All ${total} App items completed!`);
             showOnScreenHUD(`🎉 All ${total} App / Lab Items Completed!`, "success");
             await chrome.storage.local.remove(['activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId']);
@@ -1485,14 +1603,20 @@ async function processCurrentAppQueueStep() {
             log(`[App Navigator] Opening item page: ${item.url}`);
             showOnScreenHUD(`📱 Navigating to App (${currentIndex + 1}/${total}): ${item.name.substring(0, 30)}...`, "working");
             updateStatus(`Opening App ${currentIndex + 1}/${total}: ${item.name}...`);
+            updateProgress(currentIndex, total, item.name);
             await new Promise(r => setTimeout(r, 200));
             window.location.href = item.url;
             return;
         }
 
+        // Check for Coursera App Preparation Glitch
+        const wasGlitchHandled = await checkAndHandleAppPrepError(item, data.appCourseSlug);
+        if (wasGlitchHandled) return;
+
         // We ARE on this item's page! Run on-screen DOM solver!
         showOnScreenHUD(`📱 Solving On-Screen (${currentIndex + 1}/${total}): ${item.name.substring(0, 30)}...`, "working");
         updateStatus(`Solving App (${currentIndex + 1}/${total}): ${item.name}...`);
+        updateProgress(currentIndex, total, item.name);
         
         // Quick 400ms wait for React Aria DOM to mount
         await new Promise(r => setTimeout(r, 400));
@@ -1511,10 +1635,12 @@ async function processCurrentAppQueueStep() {
             const nextItem = data.activeAppQueue[nextIndex];
             log(`[App Navigator] Item ${currentIndex + 1}/${total} finished. Moving to next item: ${nextItem.name}...`);
             showOnScreenHUD(`✓ Done! Moving to Next App (${nextIndex + 1}/${total}): ${nextItem.name.substring(0, 25)}...`, "working");
+            updateProgress(nextIndex, total, nextItem.name);
             await new Promise(r => setTimeout(r, 400));
             window.location.href = nextItem.url;
         } else {
             log(`\n🎉 [App Navigator] Successfully completed all ${total} App / Lab items!`);
+            updateProgress(total, total, "Done!");
             updateStatus(`All ${total} App items completed!`);
             showOnScreenHUD(`🎉 All ${total} App / Lab Items Completed!`, "success");
             await chrome.storage.local.remove(['activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId']);
@@ -4997,10 +5123,29 @@ Strict Safety & Style Guidelines:
     }
 }
 
-// Auto-Resume Persistent Multi-Page App Queue on Page Load
+// Auto-Resume Persistent Master Chronological Queue or App Queue on Page Load
 (async () => {
     try {
-        const data = await chrome.storage.local.get(['activeAppQueue', 'appQueueIndex']);
+        const data = await chrome.storage.local.get([
+            'masterCourseQueue', 'masterCourseIndex',
+            'activeAppQueue', 'appQueueIndex'
+        ]);
+
+        // 1. Check Master Chronological Course Queue
+        if (data.masterCourseQueue && Array.isArray(data.masterCourseQueue) && data.masterCourseQueue.length > 0 && typeof data.masterCourseIndex === 'number' && data.masterCourseIndex < data.masterCourseQueue.length) {
+            log("[Master Runner] Resuming active Master Chronological Course queue on new page...");
+            globalState.isRunning = true;
+            globalState.currentAction = "complete";
+            
+            if (document.readyState !== 'complete') {
+                await new Promise(r => window.addEventListener('load', r, { once: true }));
+            }
+            await new Promise(r => setTimeout(r, 450));
+            await processMasterCourseQueueStep();
+            return;
+        }
+
+        // 2. Check Standalone App Queue
         if (data.activeAppQueue && Array.isArray(data.activeAppQueue) && data.activeAppQueue.length > 0 && typeof data.appQueueIndex === 'number' && data.appQueueIndex < data.activeAppQueue.length) {
             log("[App Navigator] Resuming active multi-page App completion queue on new page...");
             globalState.isRunning = true;
@@ -5009,10 +5154,10 @@ Strict Safety & Style Guidelines:
             if (document.readyState !== 'complete') {
                 await new Promise(r => window.addEventListener('load', r, { once: true }));
             }
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise(r => setTimeout(r, 450));
             await processCurrentAppQueueStep();
         }
     } catch(e) {
-        console.log("Notice in app queue resume:", e);
+        console.log("Notice in queue auto-resume:", e);
     }
 })();

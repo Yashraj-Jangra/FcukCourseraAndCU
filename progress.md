@@ -2,6 +2,16 @@
 
 ## Session Summary (2026-08-26)
 
+- ⏱️ **Strict Chronological Master Course Queue Runner (`processMasterCourseQueueStep`)**:
+  - Re-engineered "Complete Course (All-in-One)" into a unified chronological master state machine that traverses items in exact syllabus sequence ($\text{Video} \rightarrow \text{Reading} \rightarrow \text{App/Lab (on-screen)} \rightarrow \text{Quiz}$).
+  - Solves locked prerequisite lab items *before* attempting subsequent quizzes to completely eliminate quiz lock errors.
+  - Seamlessly performs live tab navigation for on-screen app launches and resumes instantly on new page loads.
+- 🛡️ **Automated Recovery for Coursera LTI Error (`checkAndHandleAppPrepError`)**:
+  - Automatically detects Coursera's *"We couldn't prepare the app. Please refresh the page and try again."* alert banner in the DOM.
+  - Recovers by automatically triggering a page reload (Attempt 1) or falling back to the canonical item router (`/home/item/:id`) (Attempt 2) with backend API completion passes.
+- 🎛️ **Popup UI Locking & Progress Bar Tracking (`popup.js` & `content.js`)**:
+  - Added `appItemBtn` to `setRunningUIState` to ensure all buttons (`appItemBtn`, `completeBtn`, `quizBtn`, `readBtn`, `startBtn`, `quizOnScreenBtn`) are locked when any solver is active.
+  - Explicitly hooked `updateProgress` across all app steps and master queue steps to ensure real-time progress bar rendering in the popup UI.
 - 🚀 **Unified All-in-One Sequential App Completion Pipeline (`startCompleteCourseProcess`)**:
   - Integrated full App, Lab, LTI, and Tool items into the primary "Complete Course (All-in-One)" workflow.
   - Automatically executes on-screen DOM submission for the active page and 6-schema backend API completion cascades.

@@ -1076,7 +1076,7 @@ Strict Safety & Style Guidelines:
 
 /**
  * Live On-Screen Ungraded App / LTI / Tool Solver:
- * 1. Checks all "I agree" / Terms / Consent checkboxes on the active page
+ * 1. Checks all "I agree to use this app responsibly", Terms, and Consent checkboxes on the active page
  * 2. Finds and clicks "Launch App" / "Open Tool" / "Open Workspace" / "Go to App" button or link
  * 3. Triggers window.open for external tool URL in new browser tab
  * 4. Displays live status HUD and waits 5s for Coursera session tokens to register
@@ -1090,34 +1090,43 @@ async function completeUngradedAppItemInDOM() {
 
         let actionTaken = false;
 
-        // 1. Check all consent / "I agree" / T&C checkboxes on page
-        const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"], [aria-checked="false"]'));
-        for (const cb of checkboxes) {
+        // 1. Explicitly find and check "I agree to use this app responsibly" and all consent / T&C checkboxes
+        const consentKeywords = [
+            'responsibly', 'responsible', 'i agree to use this app responsibly', 'i agree', 
+            'terms', 'consent', 'understand', 'honor code', 'third-party', 'third party', 
+            'acceptable use', 'guidelines', 'policy', 'acknowledge', 'accept'
+        ];
+
+        // A. Standard and custom ARIA checkboxes
+        const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"], [aria-checked]'));
+        for (const cb of allCheckboxes) {
             const isChecked = cb.checked || cb.getAttribute('aria-checked') === 'true';
             if (!isChecked) {
-                log(`[App / Tool Solver] Checking consent / terms checkbox...`);
-                clickNativeOption(cb);
+                log(`[App / Tool Solver] Checking "I agree to use this app responsibly" / terms checkbox...`);
+                setNativeCheckbox(cb, true);
                 actionTaken = true;
             }
         }
         
-        // Also check labels containing "agree", "terms", "consent"
-        const consentLabels = Array.from(document.querySelectorAll('label, div[class*="checkbox"], div[class*="Checkbox"]')).filter(el => {
-            const txt = (el.innerText || el.textContent || '').toLowerCase();
-            return txt.includes('agree') || txt.includes('understand') || txt.includes('terms') || txt.includes('honor code') || txt.includes('third-party');
-        });
-        for (const lbl of consentLabels) {
-            const inp = lbl.querySelector('input[type="checkbox"]');
-            if (inp && !inp.checked) {
-                clickNativeOption(inp);
-                actionTaken = true;
-            } else if (!inp) {
-                lbl.click();
-                actionTaken = true;
+        // B. Target labels, spans, and divs containing responsible use / consent text
+        const allLabelsAndContainers = Array.from(document.querySelectorAll('label, div[class*="checkbox"], div[class*="Checkbox"], span[class*="checkbox"], span[class*="Checkbox"], [data-testid*="checkbox"], [data-testid*="consent"], [data-testid*="agree"]'));
+        for (const container of allLabelsAndContainers) {
+            const txt = (container.innerText || container.textContent || '').trim().toLowerCase();
+            if (consentKeywords.some(kw => txt.includes(kw))) {
+                const childInput = container.querySelector('input[type="checkbox"]');
+                if (childInput && !childInput.checked) {
+                    log(`[App / Tool Solver] Checking consent box: "${txt.substring(0, 50)}..."`);
+                    setNativeCheckbox(childInput, true);
+                    actionTaken = true;
+                } else if (!childInput) {
+                    log(`[App / Tool Solver] Clicking custom consent toggle: "${txt.substring(0, 50)}..."`);
+                    container.click();
+                    actionTaken = true;
+                }
             }
         }
 
-        // Wait for React state to update enabled buttons
+        // Wait 1000ms for React state to update and remove disabled state from launch buttons
         await new Promise(r => setTimeout(r, 1000));
 
         // 2. Locate Launch / Open button or link
@@ -4102,6 +4111,38 @@ function setNativeInputValue(element, value) {
     }
 }
 
+function setNativeCheckbox(element, checked = true) {
+    if (!element) return;
+    try {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        element.focus();
+
+        // 1. React Synthetic Checkbox Setter
+        const proto = window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'checked')?.set;
+        if (nativeSetter) {
+            nativeSetter.call(element, checked);
+        } else {
+            element.checked = checked;
+        }
+
+        // 2. Dispatch Interaction Events
+        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        element.click();
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+
+        // 3. Trigger parent label/container click if exists
+        const label = element.closest('label') || element.parentElement;
+        if (label && label !== element) {
+            label.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        }
+    } catch(e) {
+        try { element.click(); } catch(err) {}
+    }
+}
+
 function clickNativeOption(element) {
     if (!element) return;
     try {
@@ -4451,20 +4492,22 @@ Strict Safety & Style Guidelines:
 
         // 3. Honor Code & Academic Integrity Agreement Checkbox
         showOnScreenHUD("Signing Honor Code & T&C...", "working");
-        const honorCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => {
+        const honorCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).filter(cb => {
             const labelTxt = (cb.closest('label')?.innerText || cb.parentElement?.innerText || cb.getAttribute('aria-label') || '').toLowerCase();
             const testId = (cb.getAttribute('data-testid') || cb.name || cb.id || '').toLowerCase();
             return labelTxt.includes('honor code') || labelTxt.includes('submitting work') || labelTxt.includes('own work') 
                 || labelTxt.includes('i understand') || labelTxt.includes('academic integrity') || labelTxt.includes('terms and conditions') 
                 || labelTxt.includes('terms of use') || labelTxt.includes('terms') || labelTxt.includes('agreement') 
                 || labelTxt.includes('i agree') || labelTxt.includes('acknowledge') || labelTxt.includes('code of conduct')
+                || labelTxt.includes('responsibly') || labelTxt.includes('responsible')
                 || testId.includes('honor') || testId.includes('integrity') || testId.includes('agree');
         });
 
         for (const hCb of honorCheckboxes) {
-            if (!hCb.checked) {
-                log("[On-Screen] Accepting Coursera Honor Code, Terms & Conditions checkbox...");
-                clickNativeOption(hCb);
+            const isChecked = hCb.checked || hCb.getAttribute('aria-checked') === 'true';
+            if (!isChecked) {
+                log("[On-Screen] Accepting Coursera Honor Code, Responsible Use & T&C checkbox...");
+                setNativeCheckbox(hCb, true);
             }
         }
 

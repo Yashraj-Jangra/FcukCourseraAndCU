@@ -2,6 +2,14 @@
 
 ## Session Summary (2026-08-26)
 
+- ⚡ **Multi-Layer Progress Pre-Check Engine Fix (`fetchCourseProgressState`)**:
+  - Resolved the 0 completed items issue by replacing single-endpoint query with a 6-layer fallback cascade:
+    1. **Syllabus Linked Objects**: Extracts `onDemandCourseProgresses.v1`, `onDemandItemProgresses.v1`, and `onDemandAssignmentPasses.v1` directly from `onDemandCourseMaterials.v2` linked data.
+    2. **Dual-Key Course Progress**: Queries both `${courseId}~${userId}` and `${userId}~${courseId}` parameter ordering, plus `?q=course` and `?q=user`.
+    3. **Item Progress API**: Queries `onDemandItemProgresses.v1?q=course` and `?q=courseAndUser`.
+    4. **Assignment Passes API**: Checks all passed quizzes and fractional scores >= 0.7 across `onDemandAssignmentPasses.v1`.
+    5. **Item Views API**: Queries `onDemandItemViews.v1?q=course` and `?q=user`.
+    6. **On-Screen DOM Fallback**: Scans live syllabus checkmarks (`svg[aria-label*="Completed"]`, `.rc-ItemRow--completed`, `[class*="ItemStatus--completed"]`) on Coursera web pages to capture active visual progress.
 - 🎭 **Interactive On-Screen Dialogue & Simulation Completer (`completeDialogueItemInDOM`)**:
   - Implemented the complete end-to-end interactive chat workflow for Coursera Dialogue simulations:
     1. Clicks `"Start Dialogue"` / `"Start Simulation"` button.

@@ -215,83 +215,185 @@ function classifyItemType(item) {
 }
 
 /**
- * Pre-fetches the real-time completion state and passing grades from Coursera APIs
- * Returns: { completedItemIds: Set<string>, passedQuizScores: Object<string, number> }
+ * Multi-layer Progress Pre-Fetcher:
+ * Queries all Coursera progress endpoints, syllabus linked data, and DOM status badges
+ * to reliably detect 100% of already-completed items and passed quizzes.
  */
-async function fetchCourseProgressState(userId, courseId) {
+async function fetchCourseProgressState(userId, courseId, courseSlug = null, syllabusData = null) {
     const progressData = {
         completedItemIds: new Set(),
         passedQuizScores: {}
     };
 
-    try {
-        const headers = getCourseraHeaders();
+    const headers = getCourseraHeaders();
 
-        // 1. Fetch onDemandCourseProgresses
+    const addCompleted = (id) => {
+        if (id && typeof id === 'string') progressData.completedItemIds.add(id.trim());
+    };
+
+    const addPassedQuiz = (id, score) => {
+        if (id && typeof id === 'string') {
+            const cleanId = id.trim();
+            progressData.completedItemIds.add(cleanId);
+            progressData.passedQuizScores[cleanId] = score || 100;
+        }
+    };
+
+    // 1. Extract from Syllabus Linked Data (if available)
+    try {
+        if (syllabusData && syllabusData.linked) {
+            const linkedProgress = syllabusData.linked["onDemandCourseProgresses.v1"] || [];
+            linkedProgress.forEach(lp => {
+                if (Array.isArray(lp.completedItemIds)) lp.completedItemIds.forEach(addCompleted);
+                if (Array.isArray(lp.itemProgresses)) {
+                    lp.itemProgresses.forEach(ip => {
+                        if (ip.isCompleted || ip.progressState === 'COMPLETED' || ip.progressState === 'PASSED') {
+                            addCompleted(ip.itemId);
+                        }
+                    });
+                }
+            });
+
+            const linkedItemProgress = syllabusData.linked["onDemandItemProgresses.v1"] || [];
+            linkedItemProgress.forEach(ip => {
+                if (ip.isCompleted || ip.progressState === 'COMPLETED' || ip.progressState === 'PASSED') {
+                    addCompleted(ip.itemId || ip.id);
+                }
+            });
+
+            const linkedPasses = syllabusData.linked["onDemandAssignmentPasses.v1"] || [];
+            linkedPasses.forEach(p => {
+                if (p.isPassed || p.status === 'PASSED' || p.status === 'COMPLETED') {
+                    addPassedQuiz(p.itemId, Math.round((p.fractionalScore || 1) * 100));
+                }
+            });
+        }
+    } catch(e) {}
+
+    // 2. Fetch onDemandCourseProgresses (Try both ID orders + query params)
+    const courseProgressUrls = [
+        `https://www.coursera.org/api/onDemandCourseProgresses.v1/${courseId}~${userId}?includes=completedItemIds,itemProgresses`,
+        `https://www.coursera.org/api/onDemandCourseProgresses.v1/${userId}~${courseId}?includes=completedItemIds,itemProgresses`,
+        `https://www.coursera.org/api/onDemandCourseProgresses.v1?q=course&courseId=${courseId}`,
+        `https://www.coursera.org/api/onDemandCourseProgresses.v1?q=user&userId=${userId}`
+    ];
+
+    for (const url of courseProgressUrls) {
         try {
-            const progressUrl = `https://www.coursera.org/api/onDemandCourseProgresses.v1/${userId}~${courseId}?includes=completedItemIds,itemProgresses`;
-            const resp = await fetch(progressUrl, { headers, credentials: 'include', signal: AbortSignal.timeout(6000) });
+            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(5000) });
             if (resp.ok) {
                 const data = await resp.json();
-                if (data.elements && data.elements[0]) {
-                    const el = data.elements[0];
-                    if (Array.isArray(el.completedItemIds)) {
-                        el.completedItemIds.forEach(id => progressData.completedItemIds.add(id));
-                    }
+                const elements = data.elements || [];
+                for (const el of elements) {
+                    if (Array.isArray(el.completedItemIds)) el.completedItemIds.forEach(addCompleted);
                     if (Array.isArray(el.itemProgresses)) {
                         el.itemProgresses.forEach(ip => {
-                            if (ip.isCompleted || ip.progressState === 'COMPLETED') {
-                                progressData.completedItemIds.add(ip.itemId);
+                            if (ip.isCompleted || ip.progressState === 'COMPLETED' || ip.progressState === 'PASSED') {
+                                addCompleted(ip.itemId);
                             }
                         });
                     }
                 }
+                if (progressData.completedItemIds.size > 0) break;
             }
         } catch(e) {}
+    }
 
-        // 2. Fetch onDemandAssignmentPasses (to check quizzes with passing scores)
+    // 3. Fetch onDemandItemProgresses
+    const itemProgressUrls = [
+        `https://www.coursera.org/api/onDemandItemProgresses.v1?q=course&courseId=${courseId}`,
+        `https://www.coursera.org/api/onDemandItemProgresses.v1?q=courseAndUser&courseId=${courseId}&userId=${userId}`
+    ];
+
+    for (const url of itemProgressUrls) {
         try {
-            const passesUrl = `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=course&courseId=${courseId}`;
-            const pResp = await fetch(passesUrl, { headers, credentials: 'include', signal: AbortSignal.timeout(6000) });
-            if (pResp.ok) {
-                const pData = await pResp.json();
-                (pData.elements || []).forEach(pass => {
-                    if (pass.isPassed || pass.status === 'PASSED' || pass.status === 'COMPLETED') {
-                        progressData.completedItemIds.add(pass.itemId);
-                        progressData.passedQuizScores[pass.itemId] = Math.round((pass.fractionalScore || 1) * 100);
+            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(5000) });
+            if (resp.ok) {
+                const data = await resp.json();
+                (data.elements || []).forEach(ip => {
+                    if (ip.isCompleted || ip.progressState === 'COMPLETED' || ip.progressState === 'PASSED') {
+                        addCompleted(ip.itemId || ip.id);
                     }
                 });
             }
         } catch(e) {}
+    }
 
-        // 3. Fetch onDemandItemViews
+    // 4. Fetch onDemandAssignmentPasses (Quiz & Assessment Scores)
+    const passesUrls = [
+        `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=course&courseId=${courseId}`,
+        `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=user&userId=${userId}`,
+        `https://www.coursera.org/api/onDemandAssignmentPasses.v1?q=courseAndUser&courseId=${courseId}&userId=${userId}`
+    ];
+
+    for (const url of passesUrls) {
         try {
-            const viewsUrl = `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}&userId=${userId}`;
-            const vResp = await fetch(viewsUrl, { headers, credentials: 'include', signal: AbortSignal.timeout(6000) });
-            if (vResp.ok) {
-                const vData = await vResp.json();
-                (vData.elements || []).forEach(v => {
-                    if (v.completed || v.isCompleted) progressData.completedItemIds.add(v.itemId);
+            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(5000) });
+            if (resp.ok) {
+                const data = await resp.json();
+                (data.elements || []).forEach(p => {
+                    if (p.isPassed || p.status === 'PASSED' || p.status === 'COMPLETED' || (p.fractionalScore && p.fractionalScore >= 0.7)) {
+                        addPassedQuiz(p.itemId, Math.round((p.fractionalScore || 1) * 100));
+                    }
                 });
             }
         } catch(e) {}
-
-    } catch(e) {
-        log(`Notice in progress pre-fetch: ${e.message}`);
     }
+
+    // 5. Fetch onDemandItemViews
+    const viewsUrls = [
+        `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}&userId=${userId}`,
+        `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}`,
+        `https://www.coursera.org/api/onDemandItemViews.v1/?q=user&userId=${userId}`
+    ];
+
+    for (const url of viewsUrls) {
+        try {
+            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(5000) });
+            if (resp.ok) {
+                const data = await resp.json();
+                (data.elements || []).forEach(v => {
+                    if (v.completed || v.isCompleted || v.progressState === 'COMPLETED') {
+                        addCompleted(v.itemId);
+                    }
+                });
+            }
+        } catch(e) {}
+    }
+
+    // 6. DOM Screen Check: Scan for visible completed checkmarks on the active Coursera webpage
+    try {
+        const itemLinks = Array.from(document.querySelectorAll('a[href*="/item/"]'));
+        for (const link of itemLinks) {
+            const href = link.getAttribute('href') || '';
+            const match = href.match(/\/item\/([a-zA-Z0-9_-]+)/);
+            if (!match) continue;
+            const itemId = match[1];
+
+            // Check if link or its parent container has completed indicators
+            const row = link.closest('li, [class*="ItemRow"], [class*="item-row"], [class*="ItemCard"], [class*="card"], div[role="listitem"]') || link;
+            const hasCompletedIcon = !!row.querySelector('svg[aria-label*="Completed"], svg[aria-label*="Passed"], svg[data-testid*="completed"], [class*="completed"], [class*="CompletedIcon"], [class*="success"]');
+            const rowText = (row.innerText || row.textContent || '').toLowerCase();
+            const isCompletedText = rowText.includes('completed') || rowText.includes('passed') || rowText.includes('graded: 100%') || rowText.includes('graded: 80%');
+
+            if (hasCompletedIcon || (isCompletedText && !rowText.includes('not completed'))) {
+                addCompleted(itemId);
+            }
+        }
+    } catch(e) {}
 
     return progressData;
 }
 
 async function startCompleteCourseProcess(aiConfig) {
     try {
-        const { userId, courseId, courseSlug, courseTitle, allItems, modules } = await getCourseData();
+        const { userId, courseId, courseSlug, courseTitle, allItems, modules, syllabusData } = await getCourseData();
         
         log(`Starting Full Course Auto-Completion for "${courseTitle}". Found ${allItems.length} items across ${modules.length} modules.`);
         log("[Full Course Solver] Auto-accepting Terms & Conditions, signing Honor Code, and performing final submission for all assessments.");
         
         // Fetch real-time progress state to avoid reattempting already-passed items
-        const progressData = await fetchCourseProgressState(userId, courseId);
+        const progressData = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
         log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items in this course.`);
 
         updateProgress(0, allItems.length, "Starting...");
@@ -431,12 +533,12 @@ async function startCompleteCourseProcess(aiConfig) {
 
 async function startSkippingProcess() {
     try {
-        const { userId, courseId, courseSlug, allItems } = await getCourseData();
+        const { userId, courseId, courseSlug, allItems, syllabusData } = await getCourseData();
         
         log(`Queued ${allItems.length} items for video skipping...`);
         
         // Pre-fetch progress
-        const progressData = await fetchCourseProgressState(userId, courseId);
+        const progressData = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
         log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items.`);
 
         updateProgress(0, allItems.length, "Starting...");
@@ -629,17 +731,16 @@ async function getCourseData() {
     log("Fetching course syllabus...");
     let allItems = [];
     try {
-        // Try namespaced fields to force return of specific properties
+        // Expanded includes to retrieve progress, items, lessons, and modules
         const params = new URLSearchParams({
             q: 'slug',
             slug: courseSlug,
-            includes: 'modules,lessons,items',
-            fields: 'onDemandCourseMaterialItems.v2(name,typeName,contentSummary)'
+            includes: 'modules,lessons,items,tracks,progress,itemProgresses,completedItemIds,onDemandItemProgresses.v1'
         });
         const syllabusUrl = `https://www.coursera.org/api/onDemandCourseMaterials.v2/?${params.toString()}`;
         log(`Syllabus URL: ${syllabusUrl}`);
         
-        const syllabusResp = await fetch(syllabusUrl, {credentials: "include"});
+        const syllabusResp = await fetch(syllabusUrl, { credentials: "include" });
         const syllabusData = await syllabusResp.json();
         
         if (!syllabusData.linked) {
@@ -654,11 +755,6 @@ async function getCourseData() {
 
         log(`Total items found: ${items.length} across ${modules.length} modules.`);
         
-        if (items.length > 0) {
-           log("First Item Keys: " + Object.keys(items[0]).join(", "));
-           // log("First Item Sample: " + JSON.stringify(items[0]));
-        }
-
         allItems = items.map(item => ({
             id: item.id,
             name: item.name,
@@ -674,7 +770,7 @@ async function getCourseData() {
         const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
         const courseTitle = cleanTitle || courseSlug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 
-        return { userId, courseId, courseSlug, courseTitle, allItems, modules };
+        return { userId, courseId, courseSlug, courseTitle, allItems, modules, syllabusData };
     } catch (e) {
         throw new Error("Error fetching syllabus: " + e.message);
     }
@@ -682,10 +778,10 @@ async function getCourseData() {
 
 async function startReadingCompletionProcess() {
     try {
-        const { userId, courseId, courseSlug, allItems } = await getCourseData();
+        const { userId, courseId, courseSlug, allItems, syllabusData } = await getCourseData();
         
         // Pre-fetch progress state
-        const progressData = await fetchCourseProgressState(userId, courseId);
+        const progressData = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
         log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items.`);
 
         // Filter for readings if typeName is available
@@ -1347,10 +1443,10 @@ async function completeDialogueItem(userId, courseId, courseSlug, item, aiConfig
 
 async function startQuizSolverProcess(aiConfig) {
     try {
-        const { userId, courseId, courseSlug, courseTitle, allItems, modules } = await getCourseData();
+        const { userId, courseId, courseSlug, courseTitle, allItems, modules, syllabusData } = await getCourseData();
         
         // Pre-fetch progress state to avoid reattempting passed quizzes
-        const progressData = await fetchCourseProgressState(userId, courseId);
+        const progressData = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
         log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items in this course.`);
 
         const quizItems = allItems.filter(item => {
@@ -3428,40 +3524,9 @@ async function generateCourseSummaryReport(userId, courseId, courseSlug, courseT
         log(`Generating Course Completion & Module Summary Report...`);
         const headers = getCourseraHeaders();
 
-        // 1. Fetch completed item IDs from Coursera Progress API
-        const completedIds = new Set();
-        try {
-            const progressUrl = `https://www.coursera.org/api/onDemandCourseProgresses.v1/${userId}~${courseId}?includes=completedItemIds,itemProgresses`;
-            const resp = await fetch(progressUrl, { headers, credentials: 'include' });
-            if (resp.ok) {
-                const data = await resp.json();
-                if (data.elements && data.elements[0]) {
-                    const el = data.elements[0];
-                    if (Array.isArray(el.completedItemIds)) {
-                        el.completedItemIds.forEach(id => completedIds.add(id));
-                    }
-                    if (Array.isArray(el.itemProgresses)) {
-                        el.itemProgresses.forEach(ip => {
-                            if (ip.isCompleted || ip.progressState === 'COMPLETED') {
-                                completedIds.add(ip.itemId);
-                            }
-                        });
-                    }
-                }
-            }
-        } catch(e) {}
-
-        // Fallback: check onDemandItemViews if progress API missed some
-        try {
-            const viewsUrl = `https://www.coursera.org/api/onDemandItemViews.v1/?q=course&courseId=${courseId}&userId=${userId}`;
-            const vResp = await fetch(viewsUrl, { headers, credentials: 'include' });
-            if (vResp.ok) {
-                const vData = await vResp.json();
-                (vData.elements || []).forEach(v => {
-                    if (v.completed || v.isCompleted) completedIds.add(v.itemId);
-                });
-            }
-        } catch(e) {}
+        // 1. Fetch completed item IDs using multi-layer Progress Pre-Fetcher
+        const progressState = await fetchCourseProgressState(userId, courseId, courseSlug);
+        const completedIds = progressState.completedItemIds;
 
         // 2. Compute Module Coverage
         const moduleMap = {};

@@ -2,6 +2,9 @@
 
 ## Session Summary (2026-08-26)
 
+- 🌐 **Persistent Multi-Page App Navigation Automation Engine (`processCurrentAppQueueStep`)**:
+  - Implemented cross-page persistent state machine using `chrome.storage.local` to physically navigate the active browser tab to every single App, Lab, LTI, and Tool page in the course one by one.
+  - Automatically handles tab redirects (`window.location.href`), resumes execution on page load via `checkAndResumeAppQueue`, runs the full live on-screen solver (`completeUngradedAppItemInDOM`), and transitions to the next item until the entire course is completed.
 - 📱 **Course-Wide Batch App & Lab Solver (`startCompleteAllAppItemsProcess`)**:
   - Upgraded the `"📱 Complete App Items"` action button to automatically scan the entire course syllabus, pre-check completed status, and complete **all** Ungraded/Graded App, LTI, Lab, Tool, and Workspace items one by one.
   - Automatically executes on-screen launch and token registration for the active page if open, then iterates through all remaining app items with multi-schema API cascades (`onDemandAppCompletions.v1`, `onDemandLtiItemPasses.v1`, etc.).

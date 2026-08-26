@@ -540,8 +540,11 @@ async function startCompleteCourseProcess(aiConfig) {
                     log(`[Dialogue Simulation Found] ${item.name}`);
                     result = await completeDialogueItem(userId, courseId, courseSlug, item, aiConfig, courseContext);
                 }
-                else if (category === 'app_item' || category === 'lab') {
+                else if (category === 'app_item' || category === 'lab' || isAppOrToolItem(item)) {
                     log(`[App / LTI / Lab Item Found] ${item.name}`);
+                    if (window.location.href.includes(item.id)) {
+                        await completeUngradedAppItemInDOM();
+                    }
                     result = await completeUngradedAppItem(userId, courseId, courseSlug, item);
                 }
                 else if (category === 'interactive') {
@@ -572,12 +575,52 @@ async function startCompleteCourseProcess(aiConfig) {
 
         if (globalState.abortRequested) {
             updateStatus("Process aborted.");
-        } else {
-            updateProgress(allItems.length, allItems.length, "Done!");
-            updateStatus(`Done! Processed ${allItems.length} items.`);
-            // Generate and output comprehensive course summary report with manual attention items
-            await generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules, manualAttentionItems);
+            chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+            return;
         }
+
+        // Check for any remaining uncompleted App / Lab items that require on-screen series navigation
+        const updatedProgress = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
+        const remainingUncompletedApps = allItems.filter(it => isAppOrToolItem(it) && !updatedProgress.completedItemIds.has(it.id));
+
+        if (remainingUncompletedApps.length > 0 && !globalState.abortRequested) {
+            log(`\n========================================`);
+            log(`[All-in-One Solver] Seamlessly transitioning to On-Screen App Completion for ${remainingUncompletedApps.length} remaining App / Lab item(s) in series...`);
+            log(`========================================`);
+            updateStatus(`Completing ${remainingUncompletedApps.length} App items in series...`);
+            showOnScreenHUD(`Completing ${remainingUncompletedApps.length} Remaining App Items in Series...`, "working");
+
+            // Queue persistent multi-page app queue in series
+            const queueData = {
+                activeAppQueue: remainingUncompletedApps.map(it => {
+                    const typePath = it.typeName || 'ungradedLti';
+                    const directTypes = ['ungradedLti', 'gradedLti', 'ungradedApp', 'gradedApp', 'singlePageApp', 'workspace', 'ungradedLab', 'gradedLab'];
+                    const targetUrl = directTypes.includes(typePath)
+                        ? `https://www.coursera.org/learn/${courseSlug}/${typePath}/${it.id}`
+                        : `https://www.coursera.org/learn/${courseSlug}/home/item/${it.id}`;
+                    return {
+                        id: it.id,
+                        name: it.name,
+                        typeName: typePath,
+                        url: targetUrl
+                    };
+                }),
+                appQueueIndex: 0,
+                appCourseSlug: courseSlug,
+                appCourseTitle: courseTitle,
+                appUserId: userId,
+                appCourseId: courseId
+            };
+
+            await chrome.storage.local.set(queueData);
+            await processCurrentAppQueueStep();
+            return;
+        }
+
+        updateProgress(allItems.length, allItems.length, "Done!");
+        updateStatus(`Done! Processed ${allItems.length} items.`);
+        // Generate and output comprehensive course summary report with manual attention items
+        await generateCourseSummaryReport(userId, courseId, courseSlug, courseTitle, allItems, modules, manualAttentionItems);
         chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
 
     } catch (e) {

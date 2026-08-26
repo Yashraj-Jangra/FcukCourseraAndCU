@@ -3,7 +3,7 @@
 ## Session Summary (2026-08-26)
 
 - 🐛 **Fixed GraphQL Schema Validation on Quiz Submission**:
-  - Replaced invalid query fields `attemptCount` and `allowedAttempts` with official schema fields `attemptsMade` and `attemptsAllowed` on `Submission_Attempts` in both `Submission_StartAttempt` and `Submission_SubmitLatestDraft` mutations, fixing the 400 `GRAPHQL_VALIDATION_FAILED` submission error on graded quizzes and practice assignments.
+  - Replaced invalid query fields `attemptCount`, `allowedAttempts`, and `completedAttempts` on `Submission_Attempts` with official schema fields `attemptsMade`, `attemptsAllowed`, and `outcome { earnedGrade isPassed }` on `SubmissionState` across `Submission_StartAttempt` and `Submission_SubmitLatestDraft` mutations, completely eliminating HTTP 400 `GRAPHQL_VALIDATION_FAILED` errors on quiz and graded assignment submissions.
 - 🎯 **Live On-Screen DOM Quiz & Graded Assignment Solver (`solveQuizOnScreenInDOM`)**:
   - Implemented visual on-screen solving for graded exams, quizzes, and assignments directly in front of the user on the webpage.
   - **Start / Resume Attempt Trigger**: Automatically detects and clicks "Start Attempt", "Resume Attempt", "Take Quiz", or "Continue" buttons on exam entry screens.

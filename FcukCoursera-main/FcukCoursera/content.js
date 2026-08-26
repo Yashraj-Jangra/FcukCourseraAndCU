@@ -1090,10 +1090,10 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
                   id
                 }
               }
-              completedAttempts {
-                grade
-                isPassed
-              }
+            }
+            outcome {
+              earnedGrade
+              isPassed
             }
           }
         }
@@ -1131,12 +1131,10 @@ async function processUngradedAssignment(userId, courseId, item, aiConfig, cours
             if (result?.submissionState) {
                 const subState = result.submissionState;
                 const attemptsInfo = subState.attempts;
+                const outcome = subState.outcome;
                 
                 // Check if already passed (to save limited attempts)
-                const completedAttempts = attemptsInfo?.completedAttempts || [];
-                const isAlreadyPassed = completedAttempts.some(a => a.isPassed === true);
-                
-                if (isAlreadyPassed && isGraded) {
+                if (outcome?.isPassed === true && isGraded) {
                     log(`[Graded Assignment] Already passed! Highest score recorded. Skipping to save attempts.`);
                     await markAssignmentCompletedFallback(userId, courseId, item);
                     return;
@@ -2688,11 +2686,11 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
           attemptsMade
           attemptsAllowed
           attemptsRemaining
-          completedAttempts {
-            grade
-            isPassed
-            __typename
-          }
+          __typename
+        }
+        outcome {
+          earnedGrade
+          isPassed
           __typename
         }
         __typename
@@ -2735,11 +2733,10 @@ async function submitDraftGraphQL(headers, courseId, itemId, submissionId) {
             const result = data.data?.Submission_SubmitLatestDraft;
             if (result?.submissionState) {
                 log(`[Quiz / Graded Assignment Submitted Successfully!]`);
-                const completedAttempts = result.submissionState?.attempts?.completedAttempts;
-                if (completedAttempts && completedAttempts.length > 0) {
-                    const latest = completedAttempts[completedAttempts.length - 1];
-                    const scoreText = (latest.grade !== undefined && latest.grade !== null) ? `${Math.round(latest.grade * 100)}%` : 'Recorded';
-                    const statusText = latest.isPassed ? 'PASSED (✓)' : 'Pending Grade';
+                const outcome = result.submissionState?.outcome;
+                if (outcome) {
+                    const scoreText = (outcome.earnedGrade !== undefined && outcome.earnedGrade !== null) ? `${Math.round(outcome.earnedGrade * 100)}%` : 'Recorded';
+                    const statusText = outcome.isPassed ? 'PASSED (✓)' : 'Completed';
                     log(`[Grade Result] Score: ${scoreText} - ${statusText}`);
                 }
             } else if (result?.errors) {

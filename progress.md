@@ -2,6 +2,10 @@
 
 ## Session Summary (2026-08-26)
 
+- 🎯 **On-Screen Submission Mode Selector (Auto-Submit vs. Save as Draft)**:
+  - Added an interactive modal prompt when clicking **🎯 Solve on Screen**:
+    - **🚀 Answer & Auto-Submit**: Automatically answers all questions, accepts Coursera terms and conditions / honor code agreement checkbox, enters student signature, clicks Submit button, and confirms the final submission modal dialog.
+    - **💾 Answer & Save as Draft Only**: Fills and highlights all answers on the page for visual inspection without accepting terms or clicking submit, allowing safe manual review.
 - ⚡ **Optimized LLM Execution & Non-Blocking Timeouts**:
   - Reordered `PREFERRED_TEXT_MODELS` to place stable high-speed models (`gemini-2.0-flash`, `gemini-1.5-flash`) at the front of the cascade, eliminating 404 preview model discovery delays.
   - Added strict `AbortSignal.timeout` (12s for Gemini, 15s for OpenAI/Custom) on all network requests to prevent unbounded hanging.

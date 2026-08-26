@@ -159,7 +159,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         globalState.abortRequested = false;
         globalState.currentAction = "onscreen_quiz";
         const aiConfig = request.aiConfig || request.apiKey;
-        startOnScreenQuizSolverProcess(aiConfig).finally(() => { 
+        const autoSubmit = (request.autoSubmit !== false);
+        startOnScreenQuizSolverProcess(aiConfig, autoSubmit).finally(() => { 
             globalState.isRunning = false;
             globalState.abortRequested = false;
         });
@@ -3252,11 +3253,12 @@ function clickNativeOption(element) {
     }
 }
 
-async function startOnScreenQuizSolverProcess(aiConfig) {
+async function startOnScreenQuizSolverProcess(aiConfig, autoSubmit = true) {
     try {
-        log("Starting On-Screen Live DOM Quiz Solver...");
-        updateStatus("Solving quiz in front of user...");
-        showOnScreenHUD("FcukCoursera: Analyzing Quiz Form...", "working");
+        const modeLabel = autoSubmit ? "Auto-Submit Mode" : "Save as Draft Mode";
+        log(`Starting On-Screen Live DOM Quiz Solver (${modeLabel})...`);
+        updateStatus(autoSubmit ? "Solving & Auto-Submitting..." : "Solving & Saving as Draft...");
+        showOnScreenHUD(`FcukCoursera: Analyzing Quiz (${modeLabel})...`, "working");
 
         const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
         const urlParts = window.location.pathname.split('/').filter(p => p);
@@ -3268,14 +3270,20 @@ async function startOnScreenQuizSolverProcess(aiConfig) {
             assignmentName: cleanTitle
         };
 
-        const result = await solveQuizOnScreenInDOM(aiConfig, courseContext);
+        const result = await solveQuizOnScreenInDOM(aiConfig, courseContext, autoSubmit);
         if (result) {
-            log("On-Screen Quiz Solving and Submission Completed!");
-            updateStatus("Quiz Submitted Successfully!");
-            showOnScreenHUD("🎉 Quiz Submitted Successfully!", "success");
-            setTimeout(hideOnScreenHUD, 4000);
+            if (autoSubmit) {
+                log("On-Screen Quiz Solving and Submission Completed!");
+                updateStatus("Quiz Submitted Successfully!");
+                showOnScreenHUD("🎉 Quiz Submitted Successfully!", "success");
+            } else {
+                log("On-Screen Quiz Answering Completed! Saved as draft for manual review.");
+                updateStatus("Saved as Draft on Screen!");
+                showOnScreenHUD("💾 Saved as Draft! Review and Submit.", "success");
+            }
+            setTimeout(hideOnScreenHUD, 4500);
         } else {
-            log("On-screen quiz completed or no open quiz questions found on page.");
+            log("On-screen quiz check completed (no active questions found).");
             updateStatus("Completed on-screen check.");
             hideOnScreenHUD();
         }
@@ -3288,7 +3296,7 @@ async function startOnScreenQuizSolverProcess(aiConfig) {
     }
 }
 
-async function solveQuizOnScreenInDOM(aiConfig, courseContext = null) {
+async function solveQuizOnScreenInDOM(aiConfig, courseContext = null, autoSubmit = true) {
     try {
         // 1. Check for "Start Attempt" / "Resume Attempt" buttons on intro page
         const startButtons = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"]'));
@@ -3330,7 +3338,7 @@ async function solveQuizOnScreenInDOM(aiConfig, courseContext = null) {
             return false;
         }
 
-        log(`[On-Screen] Found ${questionElements.length} questions on page. Beginning live answering...`);
+        log(`[On-Screen] Found ${questionElements.length} questions on page. Beginning live answering (${autoSubmit ? 'Auto-Submit' : 'Draft Mode'})...`);
         showOnScreenHUD(`Solving 1/${questionElements.length} Questions...`, "working");
 
         for (let i = 0; i < questionElements.length; i++) {
@@ -3355,7 +3363,7 @@ async function solveQuizOnScreenInDOM(aiConfig, courseContext = null) {
             const radios = Array.from(qEl.querySelectorAll('input[type="radio"]'));
             const checkboxes = Array.from(qEl.querySelectorAll('input[type="checkbox"]')).filter(cb => {
                 const labelTxt = (cb.closest('label')?.innerText || cb.parentElement?.innerText || '').toLowerCase();
-                return !labelTxt.includes('honor code') && !labelTxt.includes('submitting work') && !labelTxt.includes('i understand');
+                return !labelTxt.includes('honor code') && !labelTxt.includes('submitting work') && !labelTxt.includes('i understand') && !labelTxt.includes('terms and conditions');
             });
             const textareas = Array.from(qEl.querySelectorAll('textarea, input[type="text"]:not([inputmode="numeric"]), [contenteditable="true"]')).filter(inp => {
                 const p = (inp.getAttribute('placeholder') || '').toLowerCase();
@@ -3490,16 +3498,23 @@ Strict Safety & Style Guidelines:
             await new Promise(r => setTimeout(r, 400));
         }
 
+        // Check if user chose "Save as Draft Only"
+        if (!autoSubmit) {
+            log("[On-Screen] 'Save as Draft Only' mode selected. All answers filled on screen without submitting.");
+            showOnScreenHUD("💾 All Answers Filled! Review and Submit.", "success");
+            return true;
+        }
+
         // 3. Honor Code & Academic Integrity Agreement Checkbox
-        showOnScreenHUD("Signing Honor Code...", "working");
+        showOnScreenHUD("Signing Honor Code & T&C...", "working");
         const honorCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => {
             const labelTxt = (cb.closest('label')?.innerText || cb.parentElement?.innerText || cb.getAttribute('aria-label') || '').toLowerCase();
-            return labelTxt.includes('honor code') || labelTxt.includes('submitting work') || labelTxt.includes('own work') || labelTxt.includes('i understand') || labelTxt.includes('academic integrity');
+            return labelTxt.includes('honor code') || labelTxt.includes('submitting work') || labelTxt.includes('own work') || labelTxt.includes('i understand') || labelTxt.includes('academic integrity') || labelTxt.includes('terms and conditions') || labelTxt.includes('agreement');
         });
 
         for (const hCb of honorCheckboxes) {
             if (!hCb.checked) {
-                log("[On-Screen] Checking Coursera Honor Code agreement checkbox...");
+                log("[On-Screen] Accepting Coursera Honor Code & Terms checkbox...");
                 clickNativeOption(hCb);
             }
         }

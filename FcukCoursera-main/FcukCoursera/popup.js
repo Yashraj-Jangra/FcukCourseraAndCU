@@ -382,35 +382,71 @@ document.getElementById('readBtn').addEventListener('click', async () => {
     }
 })();
 
+// On-Screen Solver Mode Modal & Triggers
+const solveModeModal = document.getElementById('solveModeModal');
+const closeSolveModeBtn = document.getElementById('closeSolveModeBtn');
+const solveAndSubmitBtn = document.getElementById('solveAndSubmitBtn');
+const solveAndDraftBtn = document.getElementById('solveAndDraftBtn');
+
+if (closeSolveModeBtn) {
+    closeSolveModeBtn.addEventListener('click', () => {
+        if (solveModeModal) solveModeModal.style.display = 'none';
+    });
+}
+
 document.getElementById('quizOnScreenBtn').addEventListener('click', async () => {
     const config = getAIConfig();
     if (!config.apiKey && config.provider !== 'custom') {
         document.getElementById('status').innerText = `Enter ${config.provider} API Key first!`;
         return;
     }
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url || !tab.url.includes("coursera.org")) {
+        document.getElementById('status').innerText = "Error: Not on Coursera!";
+        return;
+    }
+
+    // Open modal to prompt user for submission preference
+    if (solveModeModal) solveModeModal.style.display = 'flex';
+});
+
+async function executeOnScreenSolver(autoSubmit) {
+    if (solveModeModal) solveModeModal.style.display = 'none';
+
+    const config = getAIConfig();
     saveSettings();
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
     if (!tab || !tab.url || !tab.url.includes("coursera.org")) {
         document.getElementById('status').innerText = "Error: Not on Coursera!";
         return;
     }
 
     setRunningUIState(true);
-    document.getElementById('status').innerText = "Solving Quiz on Screen...";
+    document.getElementById('status').innerText = autoSubmit 
+        ? "Solving & Auto-Submitting Quiz..." 
+        : "Solving & Saving Quiz as Draft...";
 
     chrome.tabs.sendMessage(tab.id, { 
         action: "start_onscreen_quiz_solver", 
         apiKey: config.apiKey, 
-        aiConfig: config 
+        aiConfig: config,
+        autoSubmit: autoSubmit
     }, (response) => {
         if (chrome.runtime.lastError) {
             setRunningUIState(false);
             document.getElementById('status').innerText = "Error: Refresh page & try again.";
         }
     });
-});
+}
+
+if (solveAndSubmitBtn) {
+    solveAndSubmitBtn.addEventListener('click', () => executeOnScreenSolver(true));
+}
+if (solveAndDraftBtn) {
+    solveAndDraftBtn.addEventListener('click', () => executeOnScreenSolver(false));
+}
 
 document.getElementById('quizBtn').addEventListener('click', async () => {
     const config = getAIConfig();

@@ -713,10 +713,6 @@ async function processMasterCourseQueueStep() {
                 return;
             }
 
-            // On item page: Check for Coursera preparation glitch and auto-recover if detected
-            const wasGlitchHandled = await checkAndHandleAppPrepError(item, courseSlug);
-            if (wasGlitchHandled) return;
-
             // Run live on-screen solver (with 8s token exchange hold)
             await completeUngradedAppItemInDOM();
             await completeUngradedAppItem(userId, courseId, courseSlug, item, true);
@@ -1284,11 +1280,16 @@ Strict Safety & Style Guidelines:
 }
 
 /**
- * Synthetic Click Dispatcher: Dispatches full pointer/mouse/touch event sequence to trigger native and framework event listeners.
+ * Synthetic Click Dispatcher: Dispatches full pointer/mouse/touch event sequence to trigger native and framework event listeners cleanly.
  */
 function clickNativeElement(element) {
     if (!element) return;
     try {
+        if (element.disabled) element.disabled = false;
+        element.removeAttribute('disabled');
+        element.setAttribute('aria-disabled', 'false');
+        element.classList.remove('disabled', 'cds-button-disabled', 'btn-disabled');
+
         if (typeof element.scrollIntoView === 'function') {
             element.scrollIntoView({ behavior: 'auto', block: 'center' });
         }
@@ -1296,17 +1297,28 @@ function clickNativeElement(element) {
             element.focus();
         }
 
-        const events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
-        for (const evtType of events) {
-            const evt = new MouseEvent(evtType, {
-                bubbles: true,
-                cancelable: true,
-                composed: true,
-                view: window,
-                detail: 1
-            });
-            element.dispatchEvent(evt);
+        const rect = element.getBoundingClientRect ? element.getBoundingClientRect() : { left: 0, top: 0, width: 10, height: 10 };
+        const clientX = (rect.left || 0) + (rect.width || 10) / 2;
+        const clientY = (rect.top || 0) + (rect.height || 10) / 2;
+
+        const commonOpts = { bubbles: true, cancelable: true, composed: true, view: window, clientX, clientY, detail: 1 };
+        
+        if (window.PointerEvent) {
+            try {
+                element.dispatchEvent(new PointerEvent('pointerdown', { ...commonOpts, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+            } catch(e) {}
         }
+        element.dispatchEvent(new MouseEvent('mousedown', { ...commonOpts, button: 0, buttons: 1 }));
+        
+        if (window.PointerEvent) {
+            try {
+                element.dispatchEvent(new PointerEvent('pointerup', { ...commonOpts, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+            } catch(e) {}
+        }
+        element.dispatchEvent(new MouseEvent('mouseup', { ...commonOpts, button: 0, buttons: 1 }));
+        
+        element.dispatchEvent(new MouseEvent('click', { ...commonOpts, button: 0 }));
+        
         if (typeof element.click === 'function') {
             element.click();
         }
@@ -1325,7 +1337,8 @@ function setNativeCheckbox(input, targetChecked = true) {
         if (isCurrentlyChecked === targetChecked) return;
 
         // 1. Bypass React's internal state tracker using prototype descriptor
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
+        const proto = window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'checked')?.set;
         if (nativeSetter) {
             nativeSetter.call(input, targetChecked);
         } else {
@@ -1336,7 +1349,7 @@ function setNativeCheckbox(input, targetChecked = true) {
         input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
         input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
-        // 3. Single synthetic click if React did not update
+        // 3. Trigger single natural click if React did not update state
         if (input.checked !== targetChecked && input.getAttribute('aria-checked') !== (targetChecked ? 'true' : 'false')) {
             const parentLabel = document.querySelector(`label[for="${input.id}"]`) || input.closest('label') || input.parentElement;
             if (parentLabel && parentLabel !== input) {
@@ -1382,8 +1395,8 @@ async function completeUngradedAppItemInDOM() {
 
         let targetLaunchBtn = null;
 
-        // Poll up to 6 times for dynamic React Aria elements to mount
-        for (let attempt = 0; attempt < 6; attempt++) {
+        // Poll up to 20 times (4 seconds total) for dynamic React Aria elements to mount
+        for (let attempt = 0; attempt < 20; attempt++) {
             // A. Standard & React Aria Checkboxes (cds-241, cds-193, value="agree", etc.)
             const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
             for (const cb of allCheckboxes) {
@@ -1396,7 +1409,7 @@ async function completeUngradedAppItemInDOM() {
             }
             
             // B. Fallback for custom toggle containers without standard input
-            const allLabelsAndContainers = Array.from(document.querySelectorAll('label, div[class*="checkbox"], div[class*="Checkbox"], [data-testid*="checkbox"], [data-testid*="consent"], [data-testid*="agree"]'));
+            const allLabelsAndContainers = Array.from(document.querySelectorAll('label, div[class*="checkbox"], div[class*="Checkbox"], [data-testid*="checkbox"], [data-testid*="consent"], [data-testid*="agree"], span'));
             for (const container of allLabelsAndContainers) {
                 const txt = (container.innerText || container.textContent || '').trim().toLowerCase();
                 if (consentKeywords.some(kw => txt.includes(kw))) {
@@ -1409,8 +1422,8 @@ async function completeUngradedAppItemInDOM() {
                         }
                     } else {
                         const isSelected = container.getAttribute('aria-checked') === 'true' || container.classList.contains('selected');
-                        if (!isSelected) {
-                            log(`[App / Tool Solver] Clicking custom consent container: "${txt.substring(0, 50)}..."`);
+                        if (!isSelected && container.tagName === 'LABEL') {
+                            log(`[App / Tool Solver] Clicking custom consent container: "${txt.substring(0, 40)}..."`);
                             clickNativeElement(container);
                             actionTaken = true;
                         }
@@ -1419,10 +1432,10 @@ async function completeUngradedAppItemInDOM() {
             }
 
             // Brief wait for React state to enable launch button
-            await new Promise(r => setTimeout(r, 120));
+            await new Promise(r => setTimeout(r, 150));
 
             // 2. Direct Query for Form Submit Launch Button
-            targetLaunchBtn = document.querySelector('form button[type="submit"], button[aria-label*="Launch" i], button[aria-label*="launch" i], button[aria-label*="Open Tool" i], button[data-testid*="launch" i]');
+            targetLaunchBtn = document.querySelector('form button[type="submit"], button[aria-label*="Launch" i], button[aria-label*="launch" i], button[aria-label*="Open Tool" i], button[data-testid*="launch" i], button[data-testid*="Launch" i]');
 
             if (!targetLaunchBtn) {
                 const allCandidates = Array.from(document.querySelectorAll('button, a[role="button"], a[href*="launch"], a[href*="tool"], input[type="submit"]'));
@@ -1727,10 +1740,6 @@ async function processCurrentAppQueueStep() {
             window.location.href = item.url;
             return;
         }
-
-        // Check for Coursera App Preparation Glitch
-        const wasGlitchHandled = await checkAndHandleAppPrepError(item, data.appCourseSlug);
-        if (wasGlitchHandled) return;
 
         // We ARE on this item's page! Run on-screen DOM solver!
         showOnScreenHUD(`📱 Solving On-Screen (${currentIndex + 1}/${total}): ${item.name.substring(0, 30)}...`, "working");
@@ -4726,90 +4735,6 @@ function setNativeInputValue(element, value) {
         element.dispatchEvent(new Event('change', { bubbles: true }));
     } catch(e) {
         element.value = value;
-    }
-}
-
-function setNativeCheckbox(element, shouldBeChecked = true) {
-    if (!element) return;
-    try {
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        element.focus();
-
-        const isCurrentlyChecked = element.checked || element.getAttribute('aria-checked') === 'true';
-        if (isCurrentlyChecked === shouldBeChecked) {
-            return;
-        }
-
-        // 1. Natural user click simulation on label or input to let React catch standard user gesture
-        const ariaLabelId = element.getAttribute('aria-labelledby');
-        const ariaLabelEl = ariaLabelId ? document.getElementById(ariaLabelId) : null;
-        const label = element.closest('label') || document.querySelector(`label[for="${element.id}"]`) || (ariaLabelEl ? ariaLabelEl.closest('label') || ariaLabelEl : null) || element.parentElement;
-
-        if (label && label !== element) {
-            label.click();
-        } else {
-            element.click();
-        }
-
-        // 2. If state did not update to shouldBeChecked, enforce via React synthetic property setter
-        if (element.checked !== shouldBeChecked) {
-            const proto = window.HTMLInputElement.prototype;
-            const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'checked')?.set;
-            if (nativeSetter) {
-                nativeSetter.call(element, shouldBeChecked);
-            } else {
-                element.checked = shouldBeChecked;
-            }
-            element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-            element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-        }
-
-        // 3. Keep ARIA and validity in sync
-        element.setAttribute('aria-checked', shouldBeChecked ? 'true' : 'false');
-        if (element.setCustomValidity) {
-            element.setCustomValidity('');
-        }
-    } catch(e) {
-        try { element.checked = shouldBeChecked; } catch(err) {}
-    }
-}
-
-function clickNativeElement(element) {
-    if (!element) return;
-    try {
-        if (element.disabled) element.disabled = false;
-        element.removeAttribute('disabled');
-        element.setAttribute('aria-disabled', 'false');
-        element.classList.remove('disabled');
-
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        element.focus();
-
-        const rect = element.getBoundingClientRect();
-        const clientX = rect.left + rect.width / 2;
-        const clientY = rect.top + rect.height / 2;
-        const opts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
-
-        if (window.PointerEvent) {
-            element.dispatchEvent(new PointerEvent('pointerover', opts));
-            element.dispatchEvent(new PointerEvent('pointerenter', opts));
-            element.dispatchEvent(new PointerEvent('pointerdown', opts));
-        }
-        element.dispatchEvent(new MouseEvent('mouseover', opts));
-        element.dispatchEvent(new MouseEvent('mousedown', opts));
-        if (window.PointerEvent) {
-            element.dispatchEvent(new PointerEvent('pointerup', opts));
-        }
-        element.dispatchEvent(new MouseEvent('mouseup', opts));
-        element.click();
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-
-        const child = element.querySelector('span, div, p');
-        if (child) {
-            try { child.click(); } catch(e) {}
-        }
-    } catch(e) {
-        try { element.click(); } catch(err) {}
     }
 }
 

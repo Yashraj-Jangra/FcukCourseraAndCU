@@ -2,6 +2,12 @@
 
 ## Session Summary (2026-08-30)
 
+- 🐛 **Eliminated Hoisted Duplicate Helpers & Fixed React Aria Event Simulation (`content.js`)**:
+  - Discovered that legacy duplicate definitions of `setNativeCheckbox` and `clickNativeElement` at the bottom of `content.js` were overriding the top-level helpers due to Javascript function hoisting.
+  - The hoisted `clickNativeElement` was recursively clicking child `<span>` and `<p>` elements, which caused an unintended second toggle.
+  - Consolidated into a single, clean `clickNativeElement` that correctly dispatches native `PointerEvent` and `MouseEvent` sequences (`pointerdown`, `mousedown`, `pointerup`, `mouseup`, `click`).
+  - Increased DOM mount polling in `completeUngradedAppItemInDOM` from 6 attempts (600ms) to **20 attempts (4,000ms)** to ensure Coursera's hydrated React tree finishes mounting before querying form inputs.
+  - Removed premature `checkAndHandleAppPrepError` calls that were intercepting and aborting queue steps before the DOM solver could run.
 - 🐛 **Checkbox Double-Toggle & Responsible Use Consent Fix (`completeUngradedAppItemInDOM` & `setNativeCheckbox`)**:
   - Identified a critical bug where `setNativeCheckbox` simulated clicks on both the label and input in rapid succession, resulting in multiple consecutive toggles that flipped `"I agree to use this app responsibly"` back to an **unchecked** state before submission.
   - Re-engineered `setNativeCheckbox` with strict idempotency: verifies `isCurrentlyChecked` and executes only a single synthetic dispatch + React prototype setter when state differs.

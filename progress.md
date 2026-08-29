@@ -1,5 +1,26 @@
 # FcukCoursera - Development Progress & Status Tracker
 
+## Session Summary (2026-08-30)
+
+- ⏱️ **Extended LTI Lab Active Hold & Token Handshake Duration (`completeUngradedAppItemInDOM` & `background.js`)**:
+  - Increased external tool active hold time to **8–10 seconds** (with live HUD countdown: *"🔬 Lab Active: Synchronizing Tokens (8s)..."*) to ensure external lab containers (Skills Network, CognitiveClass, Vocareum, Jupyter, IBM Cloud) fully establish OAuth/LTI token handshakes and callback to Coursera before navigation.
+  - Increased background service worker auto-close tab delay from 1.8s to **10s** and extended arm duration to 35s.
+  - Added post-hold scan for any newly unlocked *"Mark as Completed"*, *"I'm Done"*, or *"Submit"* buttons.
+  - Added `skipDom` flag to avoid running redundant duplicate DOM launch cycles when called from the sequential queue runner.
+- 🐛 **Item Type Resolution & DOM Sidebar Link Extractor (`fetchCourseProgressState` & `getCourseData`)**:
+  - Discovered that the Coursera syllabus API (`onDemandCourseMaterialItems.v2`) never returns `typeName` or `contentSummary` in its response.
+  - Upgraded the DOM link scanner to extract canonical `typeName` values directly from sidebar link `href` paths (`/lecture/`, `/ungradedLti/`, `/supplement/`, `/quiz/`, etc.) into an `itemTypeMap`.
+  - Enriched syllabus items with their true `typeName` before queue construction so `buildItemUrl` generates the exact canonical URL (e.g. `/ungradedLti/:id/:slug` and `/lecture/:id/:slug`).
+- 🐛 **App Item 404 & Video Classification Fixes (`classifyItemType` & `isAppOrToolItem`)**:
+  - Tightened `isAppOrToolItem` to skip keyword matching if `typeName` is known or represents lectures/videos/quizzes/readings.
+  - Added URL slug fallback checks in `classifyItemType` to prevent videos with keywords like *"hands-on"* or *"lab"* in their title from being misclassified as app items.
+  - Extracted shared `buildItemUrl(courseSlug, item)` helper to guarantee valid Coursera route construction.
+- ⚡ **Parallel Fetch Optimization Across All Workflows (`content.js`)**:
+  - Parallelized 15 sequential progress pre-check fetches with `Promise.allSettled()`, slashing startup latency by up to 58 seconds.
+  - Parallelized 50 sequential app item completion API calls into a single concurrent batch.
+  - Replaced sequential user/course ID lookups and 3-strategy reading fallbacks with `Promise.any()`.
+  - Reduced API timeouts from 4s to 2s to fail fast on dead endpoints.
+
 ## Session Summary (2026-08-26)
 
 - ⚡ **Ultra-Fast Switching & Reduced Transition Latency (`content.js` & `background.js`)**:

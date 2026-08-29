@@ -715,9 +715,9 @@ async function processMasterCourseQueueStep() {
             const wasGlitchHandled = await checkAndHandleAppPrepError(item, courseSlug);
             if (wasGlitchHandled) return;
 
-            // Run live on-screen solver
+            // Run live on-screen solver (with 8s token exchange hold)
             await completeUngradedAppItemInDOM();
-            await completeUngradedAppItem(userId, courseId, courseSlug, item);
+            await completeUngradedAppItem(userId, courseId, courseSlug, item, true);
 
             // Advance index
             const nextIndex = currentIndex + 1;
@@ -1445,8 +1445,8 @@ async function completeUngradedAppItemInDOM() {
             targetLaunchBtn.setAttribute('aria-disabled', 'false');
             targetLaunchBtn.classList.remove('cds-button-disabled', 'disabled');
 
-            // Arm background auto-tab closer to automatically clean up the newly opened lab tab
-            chrome.runtime.sendMessage({ action: "arm_lab_tab_closer", durationMs: 8000 }).catch(() => {});
+            // Arm background auto-tab closer to automatically clean up the newly opened lab tab after 35s
+            chrome.runtime.sendMessage({ action: "arm_lab_tab_closer", durationMs: 35000 }).catch(() => {});
 
             // 1. If wrapped inside a form, trigger form submission
             const form = targetLaunchBtn.closest('form');
@@ -1474,16 +1474,19 @@ async function completeUngradedAppItemInDOM() {
                     if (toolWin) {
                         setTimeout(() => {
                             try { toolWin.close(); } catch(e) {}
-                        }, 1800);
+                        }, 10000);
                     }
                 } catch(e) {}
             }
 
             actionTaken = true;
 
-            // 2. Brief 350ms token handshake registration
-            showOnScreenHUD("Registering App Tokens...", "working");
-            await new Promise(r => setTimeout(r, 350));
+            // 2. Hold active session for external LTI / token exchange and server-side progress registration
+            log("[App / Tool Solver] Lab launched. Holding session active for 8s to complete LTI token exchange & session bootstrap...");
+            for (let s = 8; s > 0; s--) {
+                showOnScreenHUD(`🔬 Lab Active: Synchronizing Tokens (${s}s)...`, "working");
+                await new Promise(r => setTimeout(r, 1000));
+            }
         } else {
             log("[App / Tool Solver] No explicit launch button found. Scanning for embedded frame or completion triggers...");
         }
@@ -1497,14 +1500,21 @@ async function completeUngradedAppItemInDOM() {
 
         // 5. Check for "Mark as Completed" / "Done" / "Submit" button
         const confirmButtons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"], a[role="button"]'));
-        const finishKeywords = ['mark as completed', 'mark as done', 'i have completed this', 'complete assignment', 'mark completed', 'done', 'submit', 'finish', "i'm done"];
+        const finishKeywords = [
+            'mark as completed', 'mark as done', 'i have completed this', 
+            'complete assignment', 'mark completed', 'done', 'submit', 'finish', 
+            "i'm done", 'mark as complete', 'mark complete', 'complete'
+        ];
         for (const fBtn of confirmButtons) {
             const fText = (fBtn.innerText || fBtn.textContent || '').trim().toLowerCase();
-            if (finishKeywords.some(kw => fText === kw || fText.includes(kw))) {
+            const fAria = (fBtn.getAttribute('aria-label') || '').toLowerCase();
+            if (fText.includes('next') || fText.includes('previous') || fText.includes('accordion') || fText.includes('module')) continue;
+
+            if (finishKeywords.some(kw => fText === kw || fText.startsWith(kw) || fAria.includes(kw))) {
                 log(`[App / Tool Solver] Found confirmation button "${fBtn.innerText || 'Mark as Completed'}". Clicking...`);
                 clickNativeElement(fBtn);
                 actionTaken = true;
-                await new Promise(r => setTimeout(r, 150));
+                await new Promise(r => setTimeout(r, 400));
                 break;
             }
         }
@@ -1526,13 +1536,13 @@ async function completeUngradedAppItemInDOM() {
  * - Waits active for 5s for session tokens and redirects
  * - Dispatches full multi-schema API completion cascade across all Coursera endpoints
  */
-async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
+async function completeUngradedAppItem(userId, courseId, courseSlug, item, skipDom = false) {
     try {
         log(`[App / Tool Item] Processing: ${item.name} (${item.typeName || 'App'})...`);
 
         // If user is currently on this app page in DOM, interact with on-screen launch form
         const isCurrentPage = window.location.href.includes(item.id);
-        if (isCurrentPage) {
+        if (isCurrentPage && !skipDom) {
             log(`[App / Tool Item] Page active in browser tab. Executing live on-screen app launcher...`);
             await completeUngradedAppItemInDOM();
         }
@@ -1706,11 +1716,11 @@ async function processCurrentAppQueueStep() {
         // Quick 80ms wait for React Aria DOM to mount
         await new Promise(r => setTimeout(r, 80));
 
-        // 1. Live DOM solver (checks box, submits LTI form to launch app in new tab, holds 2s tokens, clicks finish)
+        // 1. Live DOM solver (checks box, submits LTI form to launch app in new tab, holds 8s tokens, clicks finish)
         await completeUngradedAppItemInDOM();
 
         // 2. Multi-schema background API passes
-        await completeUngradedAppItem(data.appUserId, data.appCourseId, data.appCourseSlug, item);
+        await completeUngradedAppItem(data.appUserId, data.appCourseId, data.appCourseSlug, item, true);
 
         // 3. Advance queue index
         const nextIndex = currentIndex + 1;
@@ -1785,7 +1795,7 @@ async function startCompleteAllAppItemsProcess() {
                 log(`[App Solver] Processing current page item ID: ${itemId}...`);
                 await completeUngradedAppItemInDOM();
                 const mockItem = { id: itemId, name: document.title || "App Item", typeName: "ungradedLti" };
-                await completeUngradedAppItem(userId, courseId, courseSlug, mockItem);
+                await completeUngradedAppItem(userId, courseId, courseSlug, mockItem, true);
                 showOnScreenHUD("🎉 App Item Completed!", "success");
                 setTimeout(hideOnScreenHUD, 3500);
                 return;

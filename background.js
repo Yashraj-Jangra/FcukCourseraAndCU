@@ -14,7 +14,11 @@ const TRACKED_TOOL_DOMAINS = [
     'run.app',
     'labs.',
     'jupyter',
-    'rstudio'
+    'rstudio',
+    'ibm.com',
+    'snlabs.codeengine.appdomain.cloud',
+    'skillsnetwork.cn',
+    'theiadocker'
 ];
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -24,7 +28,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (appTabCloserTimeout) clearTimeout(appTabCloserTimeout);
         appTabCloserTimeout = setTimeout(() => {
             appTabCloserActive = false;
-        }, request.durationMs || 18000);
+        }, request.durationMs || 35000);
         sendResponse({ status: "armed" });
         return true;
     }
@@ -43,7 +47,7 @@ chrome.tabs.onCreated.addListener((newTab) => {
     const openerId = newTab.openerTabId;
     const tabId = newTab.id;
 
-    // Schedule tab closure after 1.8 seconds (allowing LTI auth token handshakes to finish on the external server)
+    // Schedule tab closure after 10 seconds (allowing LTI auth token handshakes and session init to finish on the external server)
     setTimeout(async () => {
         try {
             const currentTab = await chrome.tabs.get(tabId);
@@ -63,7 +67,7 @@ chrome.tabs.onCreated.addListener((newTab) => {
         } catch (e) {
             // Tab already closed by user or navigation
         }
-    }, 1800);
+    }, 10000);
 });
 
 // Also track when an existing blank/loading tab navigates to a known tool domain
@@ -77,7 +81,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                     await chrome.tabs.remove(tabId);
                     console.log(`[Auto Tab Closer] Closed tool tab: ${tabId}`);
                 } catch (e) {}
-            }, 1800);
+            }, 10000);
         }
     }
 });

@@ -2,6 +2,11 @@
 
 ## Session Summary (2026-08-30)
 
+- 🐛 **Checkbox Double-Toggle & Responsible Use Consent Fix (`completeUngradedAppItemInDOM` & `setNativeCheckbox`)**:
+  - Identified a critical bug where `setNativeCheckbox` simulated clicks on both the label and input in rapid succession, resulting in multiple consecutive toggles that flipped `"I agree to use this app responsibly"` back to an **unchecked** state before submission.
+  - Re-engineered `setNativeCheckbox` with strict idempotency: verifies `isCurrentlyChecked` and executes only a single synthetic dispatch + React prototype setter when state differs.
+  - Added a 120ms React state stabilization window before querying and unlocking the Launch button.
+  - Enforced form submission via `form.requestSubmit(btn)` and direct native button click events.
 - ⏱️ **Extended LTI Lab Active Hold & Token Handshake Duration (`completeUngradedAppItemInDOM` & `background.js`)**:
   - Increased external tool active hold time to **8–10 seconds** (with live HUD countdown: *"🔬 Lab Active: Synchronizing Tokens (8s)..."*) to ensure external lab containers (Skills Network, CognitiveClass, Vocareum, Jupyter, IBM Cloud) fully establish OAuth/LTI token handshakes and callback to Coursera before navigation.
   - Increased background service worker auto-close tab delay from 1.8s to **10s** and extended arm duration to 35s.

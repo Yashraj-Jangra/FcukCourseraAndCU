@@ -382,30 +382,35 @@ async function fetchCourseProgressState(userId, courseId, courseSlug = null, syl
         `https://www.coursera.org/api/onDemandSupplementCompletions.v1?q=course&courseId=${courseId}&userId=${userId}`
     ];
 
-    for (const url of progressEndpoints) {
-        try {
-            const resp = await fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(4000) });
-            if (resp.ok) {
-                const data = await resp.json();
-                const elements = data.elements || [];
-                for (const el of elements) {
-                    if (Array.isArray(el.completedItemIds)) el.completedItemIds.forEach(addCompleted);
-                    if (Array.isArray(el.itemProgresses)) {
-                        el.itemProgresses.forEach(ip => {
-                            if (ip.isCompleted || ip.progressState === 'COMPLETED' || ip.progressState === 'PASSED') {
-                                addCompleted(ip.itemId);
-                            }
-                        });
+    // Fire all progress endpoints in parallel for maximum speed (was sequential, causing 15+ second stalls)
+    const progressResults = await Promise.allSettled(
+        progressEndpoints.map(url =>
+            fetch(url, { headers, credentials: 'include', signal: AbortSignal.timeout(2000) })
+                .then(r => r.ok ? r.json() : null)
+                .catch(() => null)
+        )
+    );
+
+    for (const result of progressResults) {
+        if (result.status !== 'fulfilled' || !result.value) continue;
+        const data = result.value;
+        const elements = data.elements || [];
+        for (const el of elements) {
+            if (Array.isArray(el.completedItemIds)) el.completedItemIds.forEach(addCompleted);
+            if (Array.isArray(el.itemProgresses)) {
+                el.itemProgresses.forEach(ip => {
+                    if (ip.isCompleted || ip.progressState === 'COMPLETED' || ip.progressState === 'PASSED') {
+                        addCompleted(ip.itemId);
                     }
-                    if (el.isCompleted || el.isPassed || el.progressState === 'COMPLETED' || el.progressState === 'PASSED' || el.status === 'PASSED' || el.status === 'COMPLETED' || (el.fractionalScore && el.fractionalScore >= 0.7)) {
-                        addCompleted(el.itemId || el.id);
-                        if (el.fractionalScore !== undefined) {
-                            addPassedQuiz(el.itemId || el.id, Math.round(el.fractionalScore * 100));
-                        }
-                    }
+                });
+            }
+            if (el.isCompleted || el.isPassed || el.progressState === 'COMPLETED' || el.progressState === 'PASSED' || el.status === 'PASSED' || el.status === 'COMPLETED' || (el.fractionalScore && el.fractionalScore >= 0.7)) {
+                addCompleted(el.itemId || el.id);
+                if (el.fractionalScore !== undefined) {
+                    addPassedQuiz(el.itemId || el.id, Math.round(el.fractionalScore * 100));
                 }
             }
-        } catch(e) {}
+        }
     }
 
     // 3. Inspect Apollo / Redux State Cache in Memory
@@ -739,9 +744,6 @@ async function startSkippingProcess() {
                 if (result) {
                     log(`[Video Completed] ${item.name} (${item.moduleName})`);
                     completedCount++;
-                    await new Promise(r => setTimeout(r, 50));
-                } else {
-                    await new Promise(r => setTimeout(r, 10));
                 }
             } catch (e) {
                 log(`[Error] ${item.name}: ${e.message}`);
@@ -795,30 +797,27 @@ async function completeSingleVideo(userId, courseId, courseSlug, itemId) {
         return false;
     }
 
-    // B. Execute Completion Sequence
+    // B. Execute Completion Sequence (play + progress update in parallel, then end)
     const apiUrlBase = `https://www.coursera.org/api/opencourse.v1/user/${userId}/course/${courseSlug}/item/${itemId}/lecture/videoEvents/`;
     const progressUrl = `https://www.coursera.org/api/onDemandVideoProgresses.v1/${userId}~${courseId}~${trackingId}`;
     const headers = getCourseraHeaders();
     const payload = JSON.stringify({ contentRequestBody: {} });
-
-    // 1. Play
-    await fetch(apiUrlBase + 'play?autoEnroll=false', {
-        method: 'POST', headers: headers, body: payload, credentials: 'include'
-    });
-
-    // 2. Update Progress
     const progressPayload = JSON.stringify({
         videoProgressId: `${userId}~${courseId}~${trackingId}`,
-        viewedUpTo: timeCommitment 
-    });
-    await fetch(progressUrl, {
-        method: 'PUT', headers: headers, body: progressPayload, credentials: 'include'
+        viewedUpTo: timeCommitment
     });
 
-    // Wait a bit for server validation - Reduced to 100ms
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // 1. Play + Update Progress in parallel (no need to wait between them)
+    await Promise.all([
+        fetch(apiUrlBase + 'play?autoEnroll=false', {
+            method: 'POST', headers: headers, body: payload, credentials: 'include'
+        }),
+        fetch(progressUrl, {
+            method: 'PUT', headers: headers, body: progressPayload, credentials: 'include'
+        })
+    ]);
 
-    // 3. End
+    // 2. End event (removed unnecessary 100ms sleep — server does not require it)
     const endResp = await fetch(apiUrlBase + 'ended?autoEnroll=false', {
         method: 'POST', headers: headers, body: payload, credentials: 'include'
     });
@@ -878,40 +877,41 @@ async function getCourseData() {
     // 2. Get User ID and Course ID with multi-endpoint fallbacks
     let userId = null, courseId = null;
     
-    // Fallback cascade for User ID
+    // Resolve userId and courseId in parallel using Promise.any() — first success wins (was sequential)
     const userEndpoints = [
         "https://www.coursera.org/api/adminUserPermissions.v1?q=my",
         "https://www.coursera.org/api/userPreferences.v1?q=my",
         "https://www.coursera.org/api/externalAuthUserData.v1?q=my"
     ];
-
-    for (const uUrl of userEndpoints) {
-        try {
-            const userResp = await fetch(uUrl, { credentials: "include" });
-            if (userResp.ok) {
-                const userData = await userResp.json();
-                userId = userData.elements?.[0]?.id || userData.elements?.[0]?.userId;
-                if (userId) break;
-            }
-        } catch(e) {}
-    }
-
-    // Fallback cascade for Course ID
     const courseEndpoints = [
         `https://www.coursera.org/api/onDemandCourseMaterials.v2/?q=slug&slug=${courseSlug}&includes=tracks`,
         `https://www.coursera.org/api/onDemandCourses.v1?q=slug&slug=${courseSlug}`
     ];
 
-    for (const cUrl of courseEndpoints) {
-        try {
-            const courseResp = await fetch(cUrl, { credentials: "include" });
-            if (courseResp.ok) {
-                const courseData = await courseResp.json();
-                courseId = courseData.elements?.[0]?.id;
-                if (courseId) break;
-            }
-        } catch(e) {}
-    }
+    [userId, courseId] = await Promise.all([
+        Promise.any(
+            userEndpoints.map(u =>
+                fetch(u, { credentials: 'include', signal: AbortSignal.timeout(4000) })
+                    .then(r => r.ok ? r.json() : Promise.reject())
+                    .then(d => {
+                        const id = d.elements?.[0]?.id || d.elements?.[0]?.userId;
+                        if (!id) throw new Error('no id');
+                        return id;
+                    })
+            )
+        ).catch(() => null),
+        Promise.any(
+            courseEndpoints.map(c =>
+                fetch(c, { credentials: 'include', signal: AbortSignal.timeout(4000) })
+                    .then(r => r.ok ? r.json() : Promise.reject())
+                    .then(d => {
+                        const id = d.elements?.[0]?.id;
+                        if (!id) throw new Error('no id');
+                        return id;
+                    })
+            )
+        ).catch(() => null)
+    ]);
 
     if (!userId || !courseId) {
         throw new Error(`Could not resolve User/Course IDs (User: ${userId || 'Missing'}, Course: ${courseId || 'Missing'}). Please ensure you are logged in.`);
@@ -1010,7 +1010,6 @@ async function startReadingCompletionProcess() {
                 if (result) {
                     log(`[Reading Completed] ${item.name}`);
                     completedCount++;
-                    await new Promise(r => setTimeout(r, 50));
                 }
             } catch (e) {
                 log(`[Error] ${item.name}: ${e.message}`);
@@ -1036,7 +1035,7 @@ async function completeSingleReading(userId, courseId, courseSlug, itemId) {
     try {
         // 1. Check if it is a supplement (reading)
         const checkUrl = `https://www.coursera.org/api/onDemandSupplements.v1/${courseId}~${itemId}`;
-        const checkResp = await fetch(checkUrl, { method: 'GET', credentials: 'include' });
+        const checkResp = await fetch(checkUrl, { method: 'GET', credentials: 'include', signal: AbortSignal.timeout(2000) });
         
         if (!checkResp.ok) {
             return false; 
@@ -1047,37 +1046,19 @@ async function completeSingleReading(userId, courseId, courseSlug, itemId) {
         const resourceUrl = `https://www.coursera.org/api/onDemandSupplementCompletions.v1/${completionId}`;
         const collectionUrl = `https://www.coursera.org/api/onDemandSupplementCompletions.v1`;
 
-        // Strategy 1: POST to collection with userId as Number
-        // This is the most common pattern for creating a new completion record
-        try {
-            const body = JSON.stringify({
-                courseId: courseId,
-                itemId: itemId,
-                userId: Number(userId)
-            });
-            const res = await fetch(collectionUrl, { method: 'POST', headers, body, credentials: 'include' });
-            if (res.ok) return true;
-        } catch(e) {}
+        // Fire all 3 strategies simultaneously — first success wins (was sequential, wasting 2 extra round trips)
+        const strategies = [
+            fetch(collectionUrl, { method: 'POST', headers, credentials: 'include', signal: AbortSignal.timeout(2000),
+                body: JSON.stringify({ courseId, itemId, userId: Number(userId) }) }),
+            fetch(resourceUrl, { method: 'PUT', headers, credentials: 'include', signal: AbortSignal.timeout(2000),
+                body: JSON.stringify({ id: completionId, courseId, itemId, userId: Number(userId) }) }),
+            fetch(resourceUrl, { method: 'PUT', headers, credentials: 'include', signal: AbortSignal.timeout(2000),
+                body: JSON.stringify({ id: completionId }) })
+        ];
 
-        // Strategy 2: PUT to resource with composite ID and userId as Number
         try {
-            const body = JSON.stringify({
-                id: completionId,
-                courseId: courseId,
-                itemId: itemId,
-                userId: Number(userId)
-            });
-            const res = await fetch(resourceUrl, { method: 'PUT', headers, body, credentials: 'include' });
-            if (res.ok) return true;
-        } catch(e) {}
-
-        // Strategy 3: PUT to resource with just ID (minimal update)
-        try {
-            const body = JSON.stringify({
-                id: completionId
-            });
-            const res = await fetch(resourceUrl, { method: 'PUT', headers, body, credentials: 'include' });
-            if (res.ok) return true;
+            await Promise.any(strategies.map(p => p.then(r => { if (!r.ok) throw new Error('not ok'); return r; })));
+            return true;
         } catch(e) {}
 
         return false;
@@ -1309,7 +1290,7 @@ async function completeUngradedAppItemInDOM() {
 
         let targetLaunchBtn = null;
 
-        // Poll up to 6 times (3 seconds total) for dynamic React Aria elements to mount
+        // Poll up to 6 times for dynamic React Aria elements to mount — check synchronously first (attempt 0), then sleep
         for (let attempt = 0; attempt < 6; attempt++) {
             // A. Standard & React Aria Checkboxes (cds-241, cds-193, value="agree", etc.)
             const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"], [aria-checked]'));
@@ -1488,13 +1469,14 @@ async function completeUngradedAppItem(userId, courseId, courseSlug, item) {
             `https://www.coursera.org/api/onDemandWorkspaceSessions.v1`
         ];
 
-        for (const ep of appEndpoints) {
-            for (const body of postBodies) {
-                try {
-                    await fetch(ep, { method: 'POST', headers, body, credentials: 'include', signal: AbortSignal.timeout(4000) });
-                } catch(e) {}
-            }
-        }
+        // Fire all 50 API pass calls simultaneously — they are independent fire-and-forget calls (was sequential, up to 200s per app item)
+        await Promise.allSettled(
+            appEndpoints.flatMap(ep =>
+                postBodies.map(body =>
+                    fetch(ep, { method: 'POST', headers, body, credentials: 'include', signal: AbortSignal.timeout(2000) }).catch(() => {})
+                )
+            )
+        );
 
         // Supplement & view passes
         await completeSingleReading(userId, courseId, courseSlug, item.id);

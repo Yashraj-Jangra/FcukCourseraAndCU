@@ -106,7 +106,7 @@ function updateProgress(current, total, message) {
 
 // Coursera CSRF & Request Header Helpers
 function getCsrfToken() {
-    const match = document.cookie.match(/(?:CSRF3-Token|csrf3-token|CSRF-Token)=([^;]+)/i);
+    const match = document.cookie.match(/(?:CSRF3-Token|csrf3-token|CSRF-Token|CSRF2-Token|csrf2-token|__204_csrf_token)=([^;]+)/i);
     return match ? decodeURIComponent(match[1].trim()) : null;
 }
 
@@ -120,6 +120,8 @@ function getCourseraHeaders(extra = {}) {
     };
     if (token) {
         headers['x-csrf3-token'] = token;
+        headers['x-csrf2-token'] = token;
+        headers['x-csrf-token'] = token;
     }
     return headers;
 }
@@ -1314,15 +1316,13 @@ function clickNativeElement(element) {
 }
 
 /**
- * Native React & DOM Checkbox Setter: Sets input.checked and notifies React 16/17/18 state machines.
+ * Native React & DOM Checkbox Setter: Sets input.checked and notifies React 16/17/18 state machines without double-toggling.
  */
 function setNativeCheckbox(input, targetChecked = true) {
     if (!input) return;
     try {
-        const parentLabel = document.querySelector(`label[for="${input.id}"]`) || input.closest('label') || input.parentElement;
-        if (parentLabel && typeof parentLabel.click === 'function') {
-            parentLabel.click();
-        }
+        const isCurrentlyChecked = input.checked === true || input.getAttribute('aria-checked') === 'true';
+        if (isCurrentlyChecked === targetChecked) return;
 
         // 1. Bypass React's internal state tracker using prototype descriptor
         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
@@ -1336,14 +1336,23 @@ function setNativeCheckbox(input, targetChecked = true) {
         input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
         input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
-        // 3. Update aria attributes
+        // 3. Single synthetic click if React did not update
+        if (input.checked !== targetChecked && input.getAttribute('aria-checked') !== (targetChecked ? 'true' : 'false')) {
+            const parentLabel = document.querySelector(`label[for="${input.id}"]`) || input.closest('label') || input.parentElement;
+            if (parentLabel && parentLabel !== input) {
+                clickNativeElement(parentLabel);
+            } else {
+                clickNativeElement(input);
+            }
+        }
+
+        // 4. Update aria attributes
         input.setAttribute('aria-checked', targetChecked ? 'true' : 'false');
         input.setAttribute('data-indeterminate', 'false');
         input.removeAttribute('aria-invalid');
     } catch(e) {
         try {
             input.checked = targetChecked;
-            input.click();
         } catch(err) {}
     }
 }
@@ -1353,7 +1362,7 @@ function setNativeCheckbox(input, targetChecked = true) {
  * 1. Checks all "I agree to use this app responsibly", Terms, and Consent checkboxes on the active page
  * 2. Finds and clicks "Launch App" / "Open Tool" / "Open Workspace" / "Go to App" button or link
  * 3. Triggers window.open for external tool URL in new browser tab
- * 4. Displays live status HUD and waits 2s for Coursera session tokens to register
+ * 4. Displays live status HUD and waits 8s for Coursera session tokens & LTI callbacks to register
  * 5. Clicks "Mark as completed" / "Done" / "Submit" button if present
  * 6. Dispatches full API completion cascade
  */
@@ -1371,28 +1380,19 @@ async function completeUngradedAppItemInDOM() {
             'acceptable use', 'guidelines', 'policy', 'acknowledge', 'accept'
         ];
 
-        const launchKeywords = [
-            'launch app', 'open tool', 'open workspace', 'open app', 'go to tool', 
-            'launch', 'open lab', 'start lab', 'launch lab', 'open in new tab', 
-            'launch external tool', 'view assignment', 'open in new window', 
-            'open tool in new window', 'start assignment', 'open assignment', 'start', 'open',
-            'go to app', 'access tool', 'access workspace', 'open workspace in new window', 'launch item'
-        ];
-
         let targetLaunchBtn = null;
 
-        // Poll up to 6 times for dynamic React Aria elements to mount — check synchronously first (attempt 0), then sleep
+        // Poll up to 6 times for dynamic React Aria elements to mount
         for (let attempt = 0; attempt < 6; attempt++) {
             // A. Standard & React Aria Checkboxes (cds-241, cds-193, value="agree", etc.)
-            const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"], [aria-checked]'));
+            const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
             for (const cb of allCheckboxes) {
-                log(`[App / Tool Solver] Setting consent checkbox state (ID: ${cb.id || 'agree'})...`);
-                setNativeCheckbox(cb, true);
-                const parentLabel = cb.closest('label') || document.querySelector(`label[for="${cb.id}"]`) || cb.parentElement;
-                if (parentLabel) {
-                    clickNativeElement(parentLabel);
+                const isChecked = cb.checked === true || cb.getAttribute('aria-checked') === 'true';
+                if (!isChecked) {
+                    log(`[App / Tool Solver] Setting consent checkbox state (ID: ${cb.id || 'agree'})...`);
+                    setNativeCheckbox(cb, true);
+                    actionTaken = true;
                 }
-                actionTaken = true;
             }
             
             // B. Fallback for custom toggle containers without standard input
@@ -1400,24 +1400,48 @@ async function completeUngradedAppItemInDOM() {
             for (const container of allLabelsAndContainers) {
                 const txt = (container.innerText || container.textContent || '').trim().toLowerCase();
                 if (consentKeywords.some(kw => txt.includes(kw))) {
-                    log(`[App / Tool Solver] Clicking custom consent toggle: "${txt.substring(0, 50)}..."`);
-                    clickNativeElement(container);
-                    actionTaken = true;
+                    const innerInput = container.querySelector('input[type="checkbox"], [role="checkbox"]');
+                    if (innerInput) {
+                        if (!innerInput.checked && innerInput.getAttribute('aria-checked') !== 'true') {
+                            log(`[App / Tool Solver] Checking consent input inside label: "${txt.substring(0, 40)}..."`);
+                            setNativeCheckbox(innerInput, true);
+                            actionTaken = true;
+                        }
+                    } else {
+                        const isSelected = container.getAttribute('aria-checked') === 'true' || container.classList.contains('selected');
+                        if (!isSelected) {
+                            log(`[App / Tool Solver] Clicking custom consent container: "${txt.substring(0, 50)}..."`);
+                            clickNativeElement(container);
+                            actionTaken = true;
+                        }
+                    }
                 }
             }
 
-            // 2. Direct Query for Form Submit Launch Button (bypassing sidebar accordion module items)
-            targetLaunchBtn = document.querySelector('form button[type="submit"], button[aria-label*="Launch"], button[aria-label*="launch"], button[data-testid*="launch"]');
+            // Brief wait for React state to enable launch button
+            await new Promise(r => setTimeout(r, 120));
+
+            // 2. Direct Query for Form Submit Launch Button
+            targetLaunchBtn = document.querySelector('form button[type="submit"], button[aria-label*="Launch" i], button[aria-label*="launch" i], button[aria-label*="Open Tool" i], button[data-testid*="launch" i]');
 
             if (!targetLaunchBtn) {
-                const allCandidates = Array.from(document.querySelectorAll('button, a[role="button"], input[type="submit"]'));
+                const allCandidates = Array.from(document.querySelectorAll('button, a[role="button"], a[href*="launch"], a[href*="tool"], input[type="submit"]'));
+                const launchKeywords = [
+                    'launch app', 'open tool', 'open workspace', 'open app', 'go to tool', 
+                    'launch', 'open lab', 'start lab', 'launch lab', 'open in new tab', 
+                    'launch external tool', 'view assignment', 'open in new window', 
+                    'open tool in new window', 'start assignment', 'open assignment', 'start', 'open',
+                    'go to app', 'access tool', 'access workspace', 'open workspace in new window', 'launch item'
+                ];
+
                 for (const el of allCandidates) {
                     const text = (el.innerText || el.textContent || '').trim().toLowerCase();
                     const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const href = (el.getAttribute('href') || '').toLowerCase();
 
                     if (text.includes('module') || text.includes('week') || text.includes('help') || text.includes('close') || text.includes('minimize') || text.includes('send') || text === 'next' || text === 'previous' || text.includes('accordion')) continue;
 
-                    if (text.includes('launch') || aria.includes('launch') || (el.type === 'submit' && text.includes('app'))) {
+                    if (launchKeywords.some(kw => text === kw || text.includes(kw) || aria.includes(kw)) || href.includes('launch') || (el.type === 'submit' && text.includes('app'))) {
                         targetLaunchBtn = el;
                         break;
                     }
@@ -1433,10 +1457,10 @@ async function completeUngradedAppItemInDOM() {
             showOnScreenHUD(`Launching: ${targetLaunchBtn.innerText || 'App'}...`, "working");
 
             // Guarantee every checkbox is checked = true before submitting
-            for (const cb of Array.from(document.querySelectorAll('input[type="checkbox"]'))) {
-                setNativeCheckbox(cb, true);
-                const parentLabel = cb.closest('label') || document.querySelector(`label[for="${cb.id}"]`) || cb.parentElement;
-                if (parentLabel) clickNativeElement(parentLabel);
+            for (const cb of Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"]'))) {
+                if (!cb.checked && cb.getAttribute('aria-checked') !== 'true') {
+                    setNativeCheckbox(cb, true);
+                }
             }
 
             // Unlock button if disabled

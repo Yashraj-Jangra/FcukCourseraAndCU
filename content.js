@@ -269,6 +269,9 @@ function isAppOrToolItem(item) {
     const name = String(item.name || '').toLowerCase();
     const slug = String(item.slug || '').toLowerCase();
 
+    // Block any lecture/video type FIRST — must never be classified as an app regardless of name keywords
+    if (type.includes('lecture') || type.includes('video')) return false;
+
     // 1. Definite App, LTI, Tool, and Lab Types
     const appTypes = [
         'app', 'lti', 'lab', 'workspace', 'tool', 'singlepageapp', 'openlearningapp', 
@@ -277,21 +280,23 @@ function isAppOrToolItem(item) {
         'gradedapp', 'ungradedapp', 'gradedlab', 'ungradedlab', 'gradedworkspace', 'ungradedworkspace'
     ];
     if (appTypes.some(t => type.includes(t))) {
-        if (type === 'lecture' || type === 'video') return false;
         return true;
     }
 
-    // 2. Keyword Match in Name or Slug (Hands-on labs, guided projects, exercises, tools)
+    // 2. Keyword Match in Name or Slug — only when typeName is absent/ambiguous
+    // If the type is known (lecture, supplement, quiz, etc.), skip keyword matching entirely
+    const knownNonAppTypes = ['lecture', 'video', 'supplement', 'reading', 'quiz', 'exam', 'assignment', 'discussion', 'dialogue'];
+    if (type && knownNonAppTypes.some(t => type.includes(t))) return false;
+
     const appKeywords = [
-        'hands-on lab', 'hands on lab', 'lab:', 'lab -', 'lab', 'practice lab', 
+        'hands-on lab', 'hands on lab', 'lab:', 'lab -', 'practice lab', 
         'ungraded lab', 'workspace', 'jupyter', 'notebook', 'sandbox', 'cloud ide', 
         'rstudio', 'vscode', 'visual studio', 'app:', 'tool:', 'external tool', 
-        'interactive tool', 'interactive app', 'simulation', 'virtual lab', 
-        'hands-on', 'hands on', 'exercise:', 'exercise -', 'guided project',
+        'interactive tool', 'interactive app', 'virtual lab', 
+        'hands-on', 'hands on', 'guided project',
         'practice assignment: hands-on', 'programming assignment'
     ];
     if (appKeywords.some(kw => name.includes(kw) || slug.includes(kw))) {
-        if (type === 'lecture' || type === 'video') return false;
         return true;
     }
 
@@ -639,8 +644,11 @@ async function processMasterCourseQueueStep() {
             return processMasterCourseQueueStep();
         }
 
-        // 2. Handle App / Lab / LTI items in series (Navigates to live lab page, solves on-screen, closes tab)
-        if (category === 'app_item' || isAppOrToolItem(item)) {
+        // 2. Handle App / Lab / LTI items in series
+        // Use only classifyItemType result — it already calls isAppOrToolItem internally with lecture-first priority.
+        // Do NOT call isAppOrToolItem(item) again here: it would bypass the lecture guard and misclassify
+        // videos whose titles contain keywords like 'lab', 'notebook', 'hands-on', etc.
+        if (category === 'app_item') {
             const isCurrentPage = window.location.href.includes(item.id);
 
             // If not on this item's page, navigate to it!
@@ -668,7 +676,7 @@ async function processMasterCourseQueueStep() {
                 const nextItem = data.masterCourseQueue[nextIndex];
                 const nextCategory = classifyItemType(nextItem);
                 
-                if (nextCategory === 'app_item' || isAppOrToolItem(nextItem)) {
+                if (nextCategory === 'app_item') {
                     log(`[Master Runner] Lab finished. Navigating to next item (Lab): ${nextItem.name}...`);
                     await new Promise(r => setTimeout(r, 40));
                     window.location.href = nextItem.url;

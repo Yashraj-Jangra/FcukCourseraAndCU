@@ -245,21 +245,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 /**
  * Builds the correct navigable Coursera URL for a course item.
- * 
- * Only 'ungradedLti' and 'gradedLti' have routable path segments on Coursera.
- * All other app types (ungradedApp, gradedApp, workspace, lab, widget, programming,
- * singlePageApp, etc.) do NOT have their own URL paths — navigating to them directly
- * (e.g. /ungradedApp/:id) produces a Coursera 404 error.
- * The safe universal fallback is the canonical /home/item/:id route.
+ *
+ * Coursera URL structure (from real URLs):
+ *   Videos:  /learn/{slug}/lecture/{id}/{itemSlug}
+ *   LTI App: /learn/{slug}/ungradedLti/{id}/{itemSlug}
+ *   Others:  /learn/{slug}/home/item/{id}  (universal canonical router)
+ *
+ * Only 'ungradedLti' and 'gradedLti' have their own routable path segments.
+ * All other app types (ungradedApp, workspace, lab, widget, programming, etc.)
+ * must use /home/item/:id or they 404.
  */
 function buildItemUrl(courseSlug, item) {
     const type = item.typeName || '';
+    const itemSlug = item.slug ? `/${item.slug}` : '';
     const DIRECT_ROUTE_TYPES = ['ungradedLti', 'gradedLti'];
     if (DIRECT_ROUTE_TYPES.includes(type)) {
-        return `https://www.coursera.org/learn/${courseSlug}/${type}/${item.id}`;
+        return `https://www.coursera.org/learn/${courseSlug}/${type}/${item.id}${itemSlug}`;
     }
-    // All other types (ungradedApp, gradedApp, workspace, lab, widget,
-    // programming, singlePageApp, etc.) use the canonical item router.
+    // Lectures have their own /lecture/ path — use it for more reliable isCurrentPage detection
+    if (type === 'lecture') {
+        return `https://www.coursera.org/learn/${courseSlug}/lecture/${item.id}${itemSlug}`;
+    }
+    // All other types use the canonical item router (avoids 404 on unknown type paths)
     return `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`;
 }
 
@@ -283,10 +290,14 @@ function isAppOrToolItem(item) {
         return true;
     }
 
-    // 2. Keyword Match in Name or Slug — only when typeName is absent/ambiguous
-    // If the type is known (lecture, supplement, quiz, etc.), skip keyword matching entirely
+    // 2. Keyword Match in Name or Slug — ONLY when type is completely absent/unknown.
+    // If type is any known value (even a non-app one like 'lecture', 'quiz', 'supplement'),
+    // skip keyword matching entirely to avoid false positives on video/reading titles.
     const knownNonAppTypes = ['lecture', 'video', 'supplement', 'reading', 'quiz', 'exam', 'assignment', 'discussion', 'dialogue'];
-    if (type && knownNonAppTypes.some(t => type.includes(t))) return false;
+    if (type !== '' && knownNonAppTypes.some(t => type.includes(t))) return false;
+    // Also skip keyword matching if type is a known app-ish type (already handled above)
+    // Only proceed with keyword matching when type is genuinely unknown/empty
+    if (type !== '') return false; // Any other known type — don't guess from name
 
     const appKeywords = [
         'hands-on lab', 'hands on lab', 'lab:', 'lab -', 'practice lab', 
@@ -306,13 +317,26 @@ function isAppOrToolItem(item) {
 function classifyItemType(item) {
     const type = (item.typeName || item.contentSummary?.typeName || '').toLowerCase();
     const name = (item.name || '').toLowerCase();
+    const slug = (item.slug || '').toLowerCase();
 
-    if (type === 'lecture' || type.includes('video')) return 'lecture';
+    // --- Type-based classification (authoritative) ---
+    if (type.includes('lecture') || type.includes('video')) return 'lecture';
     if (type === 'supplement' || type === 'reading') return 'supplement';
     if (type.includes('discussion') || name.includes('discussion prompt')) return 'discussion';
     if (type.includes('dialogue') || type.includes('roleplay') || name.includes('dialogue') || name.includes('conversation')) return 'dialogue';
-    
-    // Ungraded / Upgraded App & LTI items (Checked BEFORE generic quizzes)
+
+    // --- Slug/URL-segment based fallback (when typeName is absent) ---
+    // Coursera's URL path segment is the ground truth for item type.
+    // e.g. /lecture/8Np77/ -> video,  /ungradedLti/n9tyB/ -> app
+    if (type === '') {
+        if (slug.includes('lecture') || slug.includes('video')) return 'lecture';
+        if (slug.includes('supplement') || slug.includes('reading')) return 'supplement';
+        if (slug.includes('ungradedlti') || slug.includes('gradedlti') ||
+            slug.includes('ungradedapp') || slug.includes('gradedapp') ||
+            slug.includes('lab') || slug.includes('workspace')) return 'app_item';
+    }
+
+    // App / LTI items (checked BEFORE generic quizzes)
     if (isAppOrToolItem(item)) {
         return 'app_item';
     }

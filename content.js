@@ -257,16 +257,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
  */
 function buildItemUrl(courseSlug, item) {
     const type = item.typeName || '';
+    const typeLower = type.toLowerCase();
     const itemSlug = item.slug ? `/${item.slug}` : '';
-    const DIRECT_ROUTE_TYPES = ['ungradedLti', 'gradedLti'];
-    if (DIRECT_ROUTE_TYPES.includes(type)) {
-        return `https://www.coursera.org/learn/${courseSlug}/${type}/${item.id}${itemSlug}`;
+    // ungradedLti and gradedLti have their own routable path on Coursera (case-insensitive match for safety)
+    if (typeLower === 'ungradedlti') {
+        return `https://www.coursera.org/learn/${courseSlug}/ungradedLti/${item.id}${itemSlug}`;
     }
-    // Lectures have their own /lecture/ path — use it for more reliable isCurrentPage detection
-    if (type === 'lecture') {
+    if (typeLower === 'gradedlti') {
+        return `https://www.coursera.org/learn/${courseSlug}/gradedLti/${item.id}${itemSlug}`;
+    }
+    // Lectures have their own /lecture/ path
+    if (typeLower === 'lecture') {
         return `https://www.coursera.org/learn/${courseSlug}/lecture/${item.id}${itemSlug}`;
     }
-    // All other types use the canonical item router (avoids 404 on unknown type paths)
+    // All other types (ungradedApp, workspace, lab, supplement, quiz, etc.) use the canonical item router
     return `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`;
 }
 
@@ -477,26 +481,49 @@ async function fetchCourseProgressState(userId, courseId, courseSlug = null, syl
         }
     } catch(e) {}
 
-    // 4. Universal DOM Scanner: Detect all completed checkmarks and badges across current webpage
+    // 4. Universal DOM Scanner: Detect all completed checkmarks AND extract item types from sidebar links
+    // This is the only reliable source for item typeName — the syllabus API never returns it.
+    const itemTypeMap = {}; // itemId → typeName (e.g. 'lecture', 'ungradedLti', 'supplement')
+    const URL_TYPE_SEGMENTS = ['ungradedlti', 'gradedlti', 'ungradedapp', 'gradedapp', 'lecture', 'supplement', 'quiz', 'exam', 'assignment', 'ungradedassignment', 'discussionprompt', 'discussion', 'singlepageapp', 'workspace', 'lab'];
+    // Canonical casing map for URL segments → typeName
+    const TYPE_CASING = {
+        'ungradedlti': 'ungradedLti', 'gradedlti': 'gradedLti',
+        'ungradedapp': 'ungradedApp', 'gradedapp': 'gradedApp',
+        'lecture': 'lecture', 'supplement': 'supplement',
+        'quiz': 'quiz', 'exam': 'exam',
+        'assignment': 'assignment', 'ungradedassignment': 'ungradedAssignment',
+        'discussionprompt': 'discussionPrompt', 'discussion': 'discussion',
+        'singlepageapp': 'singlePageApp', 'workspace': 'workspace', 'lab': 'lab'
+    };
     try {
-        const allCourseLinks = Array.from(document.querySelectorAll('a[href*="/learn/"], a[href*="/item/"], a[href*="/ungradedLti/"], a[href*="/gradedLti/"], a[href*="/ungradedApp/"], a[href*="/gradedApp/"], a[href*="/lecture/"], a[href*="/supplement/"], a[href*="/quiz/"], a[href*="/exam/"]'));
+        const allCourseLinks = Array.from(document.querySelectorAll('a[href*="/learn/"]'));
         for (const link of allCourseLinks) {
             const href = link.getAttribute('href') || '';
-            const { itemId } = extractCourseAndItemIdFromURL(href);
-            if (!itemId) continue;
+            const parts = href.split('/').filter(p => p);
+            // Find the type segment and item ID: /learn/{slug}/{type}/{id}
+            const learnIdx = parts.indexOf('learn');
+            if (learnIdx === -1 || parts.length < learnIdx + 4) continue;
+            const typeSeg = parts[learnIdx + 2]?.toLowerCase();
+            const itemId = parts[learnIdx + 3];
+            if (!typeSeg || !itemId || !URL_TYPE_SEGMENTS.includes(typeSeg)) continue;
 
+            // Store canonical typeName
+            if (!itemTypeMap[itemId]) {
+                itemTypeMap[itemId] = TYPE_CASING[typeSeg] || typeSeg;
+            }
+
+            // Also check for completion state
             const row = link.closest('li, [class*="ItemRow"], [class*="item-row"], [class*="ItemCard"], [class*="card"], [class*="ItemContainer"], [role="listitem"], div[class*="cds-"]') || link;
-            
             const hasCompletedIcon = !!row.querySelector('[data-testid*="completed"], [data-testid*="Completed"], [data-testid*="SuccessOutline"], [data-testid*="CheckCircle"], [data-testid*="Checkmark"], svg[aria-label*="Completed"], svg[aria-label*="Passed"], [class*="completed"], [class*="CompletedIcon"]');
             const rowText = (row.innerText || row.textContent || '').toLowerCase();
             const isCompletedText = (rowText.includes('completed') || rowText.includes('passed') || rowText.includes('100%') || rowText.includes('80%')) && !rowText.includes('not completed');
-
             if (hasCompletedIcon || isCompletedText) {
                 addCompleted(itemId);
             }
         }
     } catch(e) {}
 
+    progressData.itemTypeMap = itemTypeMap;
     return progressData;
 }
 
@@ -506,13 +533,13 @@ async function startCompleteCourseProcess(aiConfig) {
         updateStatus("Scanning course syllabus in order...");
         showOnScreenHUD("FcukCoursera: Initializing Chronological Course Solver...", "working");
 
-        // 1. Fetch course data & syllabus
-        const { userId, courseId, courseSlug, courseTitle, allItems, modules, syllabusData } = await getCourseData();
+        // 1. Fetch course data & syllabus (progressData is pre-fetched inside getCourseData for type enrichment)
+        const { userId, courseId, courseSlug, courseTitle, allItems, modules, syllabusData, progressData: prefetchedProgress } = await getCourseData();
         log(`Resolved Course: "${courseTitle}" (${courseSlug}), User ID: ${userId}`);
         log(`Total syllabus items: ${allItems.length} across ${modules.length} modules.`);
 
-        // 2. Pre-fetch completed items to skip already-passed items
-        const progressData = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
+        // 2. Reuse pre-fetched progressData (avoids a redundant second API round-trip)
+        const progressData = prefetchedProgress || await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
         log(`[Progress Pre-Check] Found ${progressData.completedItemIds.size} already-completed items in this course.`);
 
         // 3. Filter strictly for uncompleted items in exact natural syllabus sequence
@@ -996,7 +1023,8 @@ async function getCourseData() {
             id: item.id,
             name: item.name,
             slug: item.slug,
-            typeName: item.typeName || item.contentSummary?.typeName,
+            // typeName is NOT returned by the syllabus API — will be enriched from DOM scanner below
+            typeName: item.typeName || item.contentSummary?.typeName || null,
             contentSummary: item.contentSummary,
             moduleId: item.moduleId,
             moduleName: moduleMap[item.moduleId] || "Unknown Module",
@@ -1007,7 +1035,24 @@ async function getCourseData() {
         const cleanTitle = document.title ? document.title.replace(/\s*\|\s*Coursera.*$/i, '').trim() : '';
         const courseTitle = cleanTitle || courseSlug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 
-        return { userId, courseId, courseSlug, courseTitle, allItems, modules, syllabusData };
+        // Enrich items with typeName from DOM sidebar links (the only reliable source)
+        // The Coursera syllabus API never returns typeName — only sidebar hrefs have /lecture/, /ungradedLti/ etc.
+        let cachedProgressData = null;
+        try {
+            cachedProgressData = await fetchCourseProgressState(userId, courseId, courseSlug, syllabusData);
+            if (cachedProgressData.itemTypeMap) {
+                const typeMap = cachedProgressData.itemTypeMap;
+                allItems = allItems.map(item => ({
+                    ...item,
+                    typeName: item.typeName || typeMap[item.id] || null
+                }));
+                log(`[Type Enrichment] Resolved typeName for ${Object.keys(typeMap).length} items from DOM sidebar links.`);
+            }
+        } catch(e) {
+            log(`[Type Enrichment] Could not enrich types from DOM: ${e.message}`);
+        }
+
+        return { userId, courseId, courseSlug, courseTitle, allItems, modules, syllabusData, progressData: cachedProgressData };
     } catch (e) {
         throw new Error("Error fetching syllabus: " + e.message);
     }

@@ -243,6 +243,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+/**
+ * Builds the correct navigable Coursera URL for a course item.
+ * 
+ * Only 'ungradedLti' and 'gradedLti' have routable path segments on Coursera.
+ * All other app types (ungradedApp, gradedApp, workspace, lab, widget, programming,
+ * singlePageApp, etc.) do NOT have their own URL paths — navigating to them directly
+ * (e.g. /ungradedApp/:id) produces a Coursera 404 error.
+ * The safe universal fallback is the canonical /home/item/:id route.
+ */
+function buildItemUrl(courseSlug, item) {
+    const type = item.typeName || '';
+    const DIRECT_ROUTE_TYPES = ['ungradedLti', 'gradedLti'];
+    if (DIRECT_ROUTE_TYPES.includes(type)) {
+        return `https://www.coursera.org/learn/${courseSlug}/${type}/${item.id}`;
+    }
+    // All other types (ungradedApp, gradedApp, workspace, lab, widget,
+    // programming, singlePageApp, etc.) use the canonical item router.
+    return `https://www.coursera.org/learn/${courseSlug}/home/item/${item.id}`;
+}
+
 function isAppOrToolItem(item) {
     if (!item) return false;
     const type = String(item.typeName || item.contentSummary?.typeName || item.content?.typeName || item.itemMetadata?.typeName || '').toLowerCase();
@@ -487,23 +507,17 @@ async function startCompleteCourseProcess(aiConfig) {
         }
 
         // 4. Build master chronological queue preserving exact syllabus order
-        const masterQueue = uncompletedItems.map(it => {
-            const typePath = it.typeName || 'item';
-            const targetUrl = (typePath === 'ungradedLti' || typePath === 'gradedLti')
-                ? `https://www.coursera.org/learn/${courseSlug}/${typePath}/${it.id}`
-                : `https://www.coursera.org/learn/${courseSlug}/home/item/${it.id}`;
-            return {
-                id: it.id,
-                name: it.name,
-                typeName: it.typeName,
-                slug: it.slug,
-                moduleId: it.moduleId,
-                moduleName: it.moduleName,
-                isLocked: it.isLocked,
-                lockStatus: it.lockStatus,
-                url: targetUrl
-            };
-        });
+        const masterQueue = uncompletedItems.map(it => ({
+            id: it.id,
+            name: it.name,
+            typeName: it.typeName,
+            slug: it.slug,
+            moduleId: it.moduleId,
+            moduleName: it.moduleName,
+            isLocked: it.isLocked,
+            lockStatus: it.lockStatus,
+            url: buildItemUrl(courseSlug, it)
+        }));
 
         const queueData = {
             masterCourseQueue: masterQueue,
@@ -1736,18 +1750,12 @@ async function startCompleteAllAppItemsProcess() {
 
         // Store persistent queue in chrome.storage.local
         const queueData = {
-            activeAppQueue: itemsToProcess.map(it => {
-                const typePath = it.typeName || 'ungradedLti';
-                const targetUrl = (typePath === 'ungradedLti' || typePath === 'gradedLti')
-                    ? `https://www.coursera.org/learn/${courseSlug}/${typePath}/${it.id}`
-                    : `https://www.coursera.org/learn/${courseSlug}/home/item/${it.id}`;
-                return {
-                    id: it.id,
-                    name: it.name,
-                    typeName: typePath,
-                    url: targetUrl
-                };
-            }),
+            activeAppQueue: itemsToProcess.map(it => ({
+                id: it.id,
+                name: it.name,
+                typeName: it.typeName || 'ungradedLti',
+                url: buildItemUrl(courseSlug, it)
+            })),
             appQueueIndex: 0,
             appCourseSlug: courseSlug,
             appCourseTitle: courseTitle,

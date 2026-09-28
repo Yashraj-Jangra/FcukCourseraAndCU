@@ -12,6 +12,12 @@ Automates course progression for Coursera and LinkedIn Learning courses with int
 - **Interactive Apps & Labs**: Automatically handles consent agreements, launches external tools, and verifies completion.
 
 ### LinkedIn Learning Automation
+- **Learning Path Multi-Course Worker Pool**: Complete entire Learning Paths with automated parallel sub-worker tabs running simultaneously in the background.
+- **Anti-Pause Background Tab Spoofing**: Overrides `document.visibilityState` (`visible`), `document.hidden` (`false`), and suppresses `visibilitychange`/`blur` events in the `MAIN` page world so background tabs never pause or idle.
+- **Audio Keep-Alive Heartbeat**: Emits an inaudible Web Audio oscillator signal to prevent Chrome from throttling or discarding background media worker tabs.
+- **Auto-Close Finished Tabs & Queue Replenishment**: Automatically closes tabs upon 100% course completion and dispatches the next queued course until the entire path is complete.
+- **Configurable Parallel Tabs (1–5)**: Choose how many courses to run simultaneously (default: 3 parallel tabs) with instant local storage persistence.
+- **Context Auto-Detection (Path vs Single Course)**: Detects whether you are viewing a single course or a full Learning Path, with a 1-click "View Path →" button to jump to the parent path overview.
 - **Complete All Videos (Turbo 16x)**: Plays videos at up to 16x speed with muted audio, satisfying LinkedIn's client-side playback telemetry requirements and auto-advancing through the entire course until 100% finished.
 - **MAIN World Speed Controller**: Locks playback rate directly in the page's execution context via `HTMLMediaElement.prototype.playbackRate` override, preventing React player resets.
 - **Smart Instant Advance**: Automatically advances to the next video the instant LinkedIn Learning marks the current video as completed (checkmark in Table of Contents or Up-Next card), without waiting for the video to reach the end.
@@ -35,13 +41,11 @@ Automates course progression for Coursera and LinkedIn Learning courses with int
 1. Log in to Coursera and open your course home page.
 2. Click the extension icon.
 3. Configure your preferred AI Provider & API Key (if solving quizzes).
-4. Click **🚀 Complete Course (All-in-One)** or use individual buttons (**▶ Videos**, **✓ Readings**, **⚡ Quizzes**).
+4. Click **Complete Entire Course** or use individual action buttons.
 
 ### On LinkedIn Learning
-1. Log in to LinkedIn Learning and open any course video lesson.
-2. Click the extension icon (automatically adapts to LinkedIn Learning mode).
-3. Select your desired speed (default: **16x Turbo**).
-4. Click **⚡ Complete All Videos (16x Turbo)** to auto-advance through the course, or **▶ Fast-Forward Video** for the active lesson.
+1. **For Learning Paths**: Open any Learning Path overview (e.g. `/learning/paths/...`), click the extension icon, choose your parallel tabs (default: 3), and click **Complete Entire Learning Path**.
+2. **For Single Courses**: Open any course video lesson, click the extension icon, and click **Complete All Videos** (or **Fast-Forward Video** for single lesson).
 
 ## Disclaimer
 This tool is for educational purposes only. Using it to bypass academic or professional requirements may violate platform terms of service. Use responsibly.

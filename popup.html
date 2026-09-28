@@ -1,191 +1,270 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <title>FcukCoursera</title>
   <style>
-    * { 
-      box-sizing: border-box; 
-      margin: 0; 
-      padding: 0; 
+    :root {
+      --bg-root: #0e1015;
+      --bg-surface: #14171f;
+      --bg-surface-hover: #1a1e27;
+      --bg-surface-active: #212632;
+      --bg-input: #090a0d;
+      
+      --border-subtle: rgba(255, 255, 255, 0.07);
+      --border-medium: rgba(255, 255, 255, 0.12);
+      --border-focus: rgba(99, 102, 241, 0.45);
+
+      --text-primary: #f4f4f6;
+      --text-secondary: #9da1b0;
+      --text-muted: #646877;
+      
+      --accent-primary: #2563eb;
+      --accent-primary-hover: #1d4ed8;
+      
+      --color-success: #10b981;
+      --color-warning: #f59e0b;
+      --color-danger: #ef4444;
+      --color-info: #3b82f6;
+
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-full: 9999px;
     }
-    
-    body { 
-      background-color: #0b0f19; 
-      width: 400px; 
-      padding: 16px; 
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-      color: #f1f5f9; 
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-root);
+      width: 380px;
+      padding: 14px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: var(--text-primary);
       user-select: none;
       position: relative;
       overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
     }
 
-    /* Top Navigation / Brand Header */
+    /* Header */
     .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border-subtle);
     }
     .brand {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 9px;
     }
     .brand-logo {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      border: 1px solid rgba(59, 130, 246, 0.4);
+      width: 24px;
+      height: 24px;
+      border-radius: var(--radius-sm);
       object-fit: cover;
+      border: 1px solid var(--border-subtle);
     }
     .brand-title {
-      font-size: 16px;
-      font-weight: 800;
-      letter-spacing: -0.3px;
-      background: linear-gradient(135deg, #60a5fa, #38bdf8);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .brand-tag {
-      font-size: 10px;
+      font-size: 13px;
       font-weight: 600;
-      color: #64748b;
-      background: rgba(255, 255, 255, 0.05);
-      padding: 2px 7px;
-      border-radius: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      letter-spacing: -0.2px;
+      color: var(--text-primary);
+    }
+    .platform-pill {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      padding: 3px 9px;
+      border-radius: var(--radius-full);
+      font-size: 10.5px;
+      font-weight: 500;
+      color: var(--text-secondary);
     }
     .status-dot {
       width: 6px;
       height: 6px;
-      border-radius: 50%;
-      background-color: #22c55e;
-      box-shadow: 0 0 6px #22c55e;
+      border-radius: var(--radius-full);
+      background-color: var(--color-success);
+      flex-shrink: 0;
     }
     .status-dot.busy {
-      background-color: #38bdf8;
-      box-shadow: 0 0 6px #38bdf8;
-      animation: pulse 1.5s infinite;
+      background-color: var(--color-info);
+      animation: gentle-pulse 1.8s ease-in-out infinite;
     }
 
-    @keyframes pulse {
-      0% { opacity: 0.6; }
+    @keyframes gentle-pulse {
+      0%, 100% { opacity: 0.4; }
       50% { opacity: 1; }
-      100% { opacity: 0.6; }
     }
 
-    /* Actions Section */
-    .action-hero {
-      margin-bottom: 8px;
-    }
-    .btn-hero {
-      width: 100%;
-      padding: 11px;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.2px;
-      color: white;
-      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 50%, #1e40af 100%);
-      border: 1px solid rgba(96, 165, 250, 0.3);
-      border-radius: 8px;
+    /* Action Buttons Base */
+    button {
+      font-family: inherit;
+      outline: none;
+      border: none;
       cursor: pointer;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 7px;
-      transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
+      gap: 6px;
+      transition: background 0.14s ease, border-color 0.14s ease, transform 0.06s ease, opacity 0.14s ease;
     }
-    .btn-hero:hover {
-      filter: brightness(1.1);
-      transform: translateY(-1px);
-      box-shadow: 0 6px 18px rgba(37, 99, 235, 0.35);
+    button:active {
+      transform: scale(0.985);
     }
-    .btn-hero:active {
-      transform: translateY(0);
+    button:disabled {
+      opacity: 0.38 !important;
+      cursor: not-allowed !important;
+      transform: none !important;
     }
 
-    .action-grid {
+    /* Primary Hero Button */
+    .btn-hero {
+      width: 100%;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.1px;
+      color: #ffffff;
+      background: var(--accent-primary);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-md);
+      margin-bottom: 8px;
+    }
+    .btn-hero:hover:not(:disabled) {
+      background: var(--accent-primary-hover);
+    }
+
+    /* Secondary Action Grid */
+    .action-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .action-grid-3 {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
       gap: 6px;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
+
     .btn-action {
-      padding: 8px 6px;
+      padding: 7px 8px;
       font-size: 11px;
-      font-weight: 600;
-      color: #e2e8f0;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 7px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 4px;
-      transition: all 0.15s ease;
+      font-weight: 500;
+      color: var(--text-primary);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
     }
-    .btn-action:hover {
-      background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(255, 255, 255, 0.16);
-      color: #fff;
-    }
-    .btn-action:active {
-      transform: scale(0.98);
+    .btn-action:hover:not(:disabled) {
+      background: var(--bg-surface-hover);
+      border-color: var(--border-medium);
     }
 
-    .btn-stop {
-      display: none;
-      width: 100%;
-      padding: 9px;
-      margin-bottom: 10px;
-      font-size: 11px;
-      font-weight: 700;
-      color: #fecaca;
-      background: rgba(220, 38, 38, 0.2);
-      border: 1px solid #ef4444;
-      border-radius: 7px;
-      cursor: pointer;
-      transition: all 0.15s ease;
-    }
-    .btn-stop:hover {
-      background: rgba(220, 38, 38, 0.3);
-    }
-
-    button:disabled {
-      opacity: 0.45 !important;
-      cursor: not-allowed !important;
-      transform: none !important;
-      box-shadow: none !important;
-    }
-
-    /* Settings Section */
-    .settings-section {
-      background: rgba(255, 255, 255, 0.025);
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      border-radius: 8px;
-      padding: 10px 12px;
-      margin-bottom: 10px;
-    }
-    .settings-header {
+    /* Speed Control Container (LinkedIn) */
+    .speed-control-box {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 2px 8px;
     }
-    .settings-title {
-      font-size: 10px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: #94a3b8;
+    .speed-control-label {
+      font-size: 10.5px;
+      font-weight: 500;
+      color: var(--text-muted);
     }
-    
+    select.speed-dropdown {
+      background: transparent;
+      border: none;
+      color: var(--text-primary);
+      font-size: 11px;
+      font-weight: 600;
+      outline: none;
+      cursor: pointer;
+      padding: 4px 2px;
+    }
+    select.speed-dropdown option {
+      background-color: var(--bg-surface);
+      color: var(--text-primary);
+    }
+
+    /* Stop Button */
+    .btn-stop {
+      display: none;
+      width: 100%;
+      padding: 8px 12px;
+      margin-bottom: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.28);
+      border-radius: var(--radius-sm);
+    }
+    .btn-stop:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+
+    /* Settings Collapsible Accordion */
+    details.settings-section {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    summary.settings-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 11px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+      transition: background 0.14s ease, color 0.14s ease;
+    }
+    summary.settings-summary::-webkit-details-marker {
+      display: none;
+    }
+    summary.settings-summary:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .settings-title-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .chevron-icon {
+      color: var(--text-muted);
+      transition: transform 0.2s ease;
+    }
+    details[open] .chevron-icon {
+      transform: rotate(180deg);
+    }
+    .settings-body {
+      padding: 8px 11px 11px;
+      border-top: 1px solid var(--border-subtle);
+    }
     .form-group {
       margin-bottom: 8px;
     }
@@ -195,72 +274,75 @@
     .form-label {
       display: block;
       font-size: 10px;
-      color: #64748b;
-      font-weight: 600;
+      font-weight: 500;
+      color: var(--text-muted);
       margin-bottom: 3px;
     }
     .form-control {
       width: 100%;
-      padding: 7px 9px;
+      padding: 6px 9px;
       font-size: 11px;
-      color: #f1f5f9;
-      background: #060911;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 6px;
+      color: var(--text-primary);
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
       outline: none;
-      transition: all 0.15s ease;
+      transition: border-color 0.14s ease;
     }
     .form-control:focus {
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+      border-color: var(--border-focus);
     }
     select.form-control {
       cursor: pointer;
+    }
+    select.form-control option {
+      background-color: var(--bg-surface);
+      color: var(--text-primary);
     }
 
     /* Progress & Status */
     .progress-wrapper {
       display: none;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     .progress-track {
-      background: rgba(255, 255, 255, 0.06);
-      border-radius: 4px;
-      height: 5px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-full);
+      height: 4px;
       overflow: hidden;
     }
     .progress-bar {
       height: 100%;
       width: 0%;
-      background: linear-gradient(90deg, #3b82f6, #10b981);
-      border-radius: 4px;
-      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      background: var(--accent-primary);
+      border-radius: var(--radius-full);
+      transition: width 0.25s ease-out;
     }
     .progress-info {
       display: flex;
       justify-content: space-between;
       font-size: 10px;
-      color: #94a3b8;
+      color: var(--text-muted);
       margin-top: 4px;
       font-weight: 500;
     }
-
     .status-text {
       text-align: center;
       font-size: 11px;
-      font-weight: 600;
-      color: #38bdf8;
-      margin-bottom: 10px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
 
-    /* Console Logs */
+    /* Console Activity Feed */
     .console-box {
-      background: #060911;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
       overflow: hidden;
     }
     .console-header {
@@ -268,100 +350,74 @@
       align-items: center;
       justify-content: space-between;
       padding: 6px 10px;
-      background: rgba(255, 255, 255, 0.03);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      border-bottom: 1px solid var(--border-subtle);
     }
     .console-title {
       font-size: 10px;
-      font-weight: 700;
-      color: #64748b;
-      letter-spacing: 0.3px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
     }
     .console-actions {
       display: flex;
-      gap: 5px;
+      gap: 4px;
     }
     .btn-tool {
       background: transparent;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: #94a3b8;
-      font-size: 9px;
-      font-weight: 600;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      font-size: 9.5px;
+      font-weight: 500;
       padding: 2px 7px;
-      border-radius: 4px;
-      cursor: pointer;
-      transition: all 0.15s ease;
+      border-radius: var(--radius-sm);
     }
     .btn-tool:hover {
-      background: rgba(255, 255, 255, 0.08);
-      color: #fff;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-primary);
+      border-color: var(--border-medium);
     }
 
     .log-stream {
-      height: 150px;
+      height: 125px;
       overflow-y: auto;
-      padding: 8px;
-      font-family: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+      padding: 6px 8px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
       font-size: 10px;
       line-height: 1.45;
+      background: var(--bg-input);
       user-select: text;
     }
-
     .log-entry {
-      margin-bottom: 4px;
-      padding: 3px 6px;
+      margin-bottom: 3px;
+      padding: 2px 5px;
       border-radius: 4px;
-      border-left: 3px solid transparent;
-      word-break: break-word;
       display: flex;
       align-items: flex-start;
       gap: 6px;
+      word-break: break-word;
     }
     .log-time {
-      color: #475569;
+      color: var(--text-dim);
       font-size: 9px;
       flex-shrink: 0;
       padding-top: 1px;
     }
     .log-text {
       flex-grow: 1;
+      color: var(--text-secondary);
     }
+    .log-error .log-text { color: #f87171; }
+    .log-success .log-text { color: #34d399; }
+    .log-warning .log-text { color: #fbbf24; }
+    .log-ai .log-text { color: #60a5fa; }
 
-    .log-error {
-      background: rgba(239, 68, 68, 0.12);
-      border-left-color: #ef4444;
-      color: #fca5a5;
-    }
-    .log-success {
-      background: rgba(34, 197, 94, 0.12);
-      border-left-color: #22c55e;
-      color: #86efac;
-    }
-    .log-warning {
-      background: rgba(245, 158, 11, 0.12);
-      border-left-color: #f59e0b;
-      color: #fde047;
-    }
-    .log-ai {
-      background: rgba(56, 189, 248, 0.10);
-      border-left-color: #0ea5e9;
-      color: #7dd3fc;
-    }
-    .log-info {
-      background: rgba(148, 163, 184, 0.04);
-      border-left-color: #475569;
-      color: #cbd5e1;
-    }
-
-    /* Full-Screen Report Overlay */
+    /* Modals */
     #reportModal {
       display: none;
       position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: #0b0f19;
+      inset: 0;
+      background: var(--bg-root);
       z-index: 100;
       padding: 14px;
       overflow-y: auto;
@@ -371,72 +427,152 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .report-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
     }
     .report-card {
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
       padding: 10px 12px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     .report-badge {
       display: inline-block;
-      padding: 2px 7px;
+      padding: 2px 6px;
       font-size: 9px;
-      font-weight: 700;
+      font-weight: 600;
       border-radius: 4px;
     }
-    .badge-done { 
-      background: rgba(34, 197, 94, 0.2); 
-      color: #4ade80; 
-      border: 1px solid rgba(34, 197, 94, 0.4); 
+    .badge-done {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
     }
-    .badge-progress { 
-      background: rgba(245, 158, 11, 0.2); 
-      color: #facc15; 
-      border: 1px solid rgba(245, 158, 11, 0.4); 
+    .badge-progress {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
     }
     .module-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 6px 0;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 5px 0;
+      border-bottom: 1px solid var(--border-subtle);
       font-size: 10px;
     }
     .module-row:last-child {
       border-bottom: none;
     }
+
+    #solveModeModal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      padding: 18px;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .modal-dialog {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-medium);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+    }
+    .modal-dialog-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .modal-dialog-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .modal-dialog-desc {
+      font-size: 10.5px;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+    .modal-choice-btn {
+      width: 100%;
+      text-align: left;
+      padding: 9px 11px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      cursor: pointer;
+      margin-bottom: 6px;
+    }
+    .choice-primary {
+      background: var(--accent-primary);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #fff;
+    }
+    .choice-primary:hover {
+      background: var(--accent-primary-hover);
+    }
+    .choice-secondary {
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+    }
+    .choice-secondary:hover {
+      background: var(--bg-surface-hover);
+      border-color: var(--border-medium);
+    }
+    .choice-title {
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .choice-sub {
+      font-size: 9.5px;
+      opacity: 0.75;
+      font-weight: 400;
+    }
   </style>
 </head>
 <body>
 
-  <!-- Brand Header -->
-  <div class="header">
+  <!-- Brand & Status Header -->
+  <header class="header">
     <div class="brand">
-      <img src="icon.jpg" alt="Logo" class="brand-logo">
-      <div class="brand-title">FcukCoursera</div>
+      <img src="icon.jpg" alt="Icon" class="brand-logo">
+      <span class="brand-title">FcukCoursera</span>
     </div>
-    <div class="brand-tag">
-      <div id="statusDot" class="status-dot"></div>
-      <span id="platformTag">v2.2 Pro</span>
+    <div class="platform-pill">
+      <span id="statusDot" class="status-dot"></span>
+      <span id="platformTag">Coursera</span>
     </div>
-  </div>
+  </header>
 
-  <!-- LinkedIn Learning Dedicated Actions -->
-  <div id="linkedinSection" style="display: none;">
-    <div class="action-hero">
-      <button id="linkedinCompleteBtn" class="btn-hero" style="background: linear-gradient(135deg, #0284c7 0%, #0369a1 50%, #075985 100%); border-color: rgba(56, 189, 248, 0.4); box-shadow: 0 4px 14px rgba(2, 132, 199, 0.3);">
-        ⚡ Complete All Videos (16x Turbo)
+  <!-- LinkedIn Learning Actions View -->
+  <section id="linkedinSection" style="display: none;">
+    <button id="linkedinCompleteBtn" class="btn-hero" style="background: #0284c7;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 19 22 12 13 5 13 19"></polygon><polygon points="2 19 11 12 2 5 2 19"></polygon></svg>
+      <span>Complete All Videos</span>
+    </button>
+    <div class="action-grid-2" style="margin-bottom: 10px;">
+      <button id="linkedinSingleBtn" class="btn-action">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        <span>Fast-Forward Video</span>
       </button>
-    </div>
-    <div class="action-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 10px;">
-      <button id="linkedinSingleBtn" class="btn-action" style="background: rgba(14, 165, 233, 0.15); border-color: rgba(14, 165, 233, 0.4); color: #7dd3fc; font-weight: 700;">
-        ▶ Fast-Forward Video
-      </button>
-      <div style="display: flex; align-items: center; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 7px; padding: 0 8px;">
-        <span style="font-size: 10px; color: #94a3b8; font-weight: 600; margin-right: 5px;">Speed:</span>
-        <select id="linkedinSpeedSelect" style="background: transparent; border: none; color: #38bdf8; font-size: 11px; font-weight: 700; outline: none; cursor: pointer; width: 100%;">
+      <div class="speed-control-box">
+        <span class="speed-control-label">Speed</span>
+        <select id="linkedinSpeedSelect" class="speed-dropdown">
           <option value="16" selected>16x Turbo</option>
           <option value="8">8x Ultra</option>
           <option value="4">4x Fast</option>
@@ -444,118 +580,145 @@
         </select>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- Coursera Dedicated Actions -->
-  <div id="courseraSection">
-    <!-- Primary Hero Action -->
-    <div class="action-hero">
-      <button id="completeBtn" class="btn-hero">🚀 Complete Course (All-in-One)</button>
+  <!-- Coursera Actions View -->
+  <section id="courseraSection">
+    <button id="completeBtn" class="btn-hero">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+      <span>Complete Entire Course</span>
+    </button>
+
+    <div class="action-grid-2">
+      <button id="quizOnScreenBtn" class="btn-action">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>
+        <span>Solve on Screen</span>
+      </button>
+      <button id="appItemBtn" class="btn-action">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+        <span>Complete Labs</span>
+      </button>
     </div>
 
-    <!-- Action Grid -->
-    <div class="action-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 6px;">
-      <button id="quizOnScreenBtn" class="btn-action" style="background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd; font-weight: 700;">🎯 Solve on Screen</button>
-      <button id="appItemBtn" class="btn-action" style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.4); color: #6ee7b7; font-weight: 700;">📱 Complete App Items</button>
+    <div class="action-grid-3">
+      <button id="quizBtn" class="btn-action">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+        <span>Quizzes</span>
+      </button>
+      <button id="startBtn" class="btn-action">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 18 12 6 20 6 4"></polygon></svg>
+        <span>Videos</span>
+      </button>
+      <button id="readBtn" class="btn-action">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+        <span>Readings</span>
+      </button>
     </div>
-    <div class="action-grid" style="grid-template-columns: 1fr 1fr 1fr; margin-bottom: 12px;">
-      <button id="quizBtn" class="btn-action">⚡ Quizzes</button>
-      <button id="startBtn" class="btn-action">▶ Videos</button>
-      <button id="readBtn" class="btn-action">✓ Readings</button>
+  </section>
+
+  <!-- Abort Active Process -->
+  <button id="stopBtn" class="btn-stop">
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>
+    <span>Stop Process</span>
+  </button>
+
+  <!-- Collapsible AI Solver Settings -->
+  <details id="aiSettingsSection" class="settings-section">
+    <summary class="settings-summary">
+      <div class="settings-title-group">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>AI Solver Settings</span>
+      </div>
+      <svg class="chevron-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </summary>
+
+    <div class="settings-body">
+      <div class="form-group">
+        <label class="form-label" for="providerSelect">Provider</label>
+        <select id="providerSelect" class="form-control">
+          <option value="gemini">Google Gemini</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="groq">Groq</option>
+          <option value="custom">Custom Endpoint / Ollama</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="apiKey">API Key</label>
+        <input type="password" id="apiKey" class="form-control" placeholder="Paste API Key...">
+      </div>
+
+      <div class="form-group" id="modelGroup" style="display: none;">
+        <label class="form-label" for="modelInput">Model Name</label>
+        <input type="text" id="modelInput" class="form-control" placeholder="meta-llama/llama-3.3-70b-instruct:free">
+      </div>
+
+      <div class="form-group" id="endpointGroup" style="display: none;">
+        <label class="form-label" for="endpointInput">Endpoint URL</label>
+        <input type="text" id="endpointInput" class="form-control" placeholder="http://localhost:11434/v1/chat/completions">
+      </div>
     </div>
-  </div>
+  </details>
 
-  <button id="stopBtn" class="btn-stop">🛑 Stop Active Process</button>
-
-  <!-- AI Settings -->
-  <div id="aiSettingsSection" class="settings-section">
-    <div class="settings-header">
-      <span class="settings-title">AI Engine Settings</span>
-    </div>
-
-    <div class="form-group">
-      <select id="providerSelect" class="form-control">
-        <option value="gemini">Google Gemini (Default)</option>
-        <option value="openrouter">OpenRouter (Free & Paid)</option>
-        <option value="groq">Groq (Ultra-Fast ~100ms)</option>
-        <option value="custom">Custom OpenAI / Local Ollama</option>
-      </select>
-    </div>
-
-    <div class="form-group">
-      <input type="password" id="apiKey" class="form-control" placeholder="Paste API Key here...">
-    </div>
-
-    <div class="form-group" id="modelGroup" style="display: none;">
-      <label class="form-label" for="modelInput">Model Name</label>
-      <input type="text" id="modelInput" class="form-control" placeholder="meta-llama/llama-3.3-70b-instruct:free">
-    </div>
-
-    <div class="form-group" id="endpointGroup" style="display: none;">
-      <label class="form-label" for="endpointInput">Custom API Endpoint URL</label>
-      <input type="text" id="endpointInput" class="form-control" placeholder="http://localhost:11434/v1/chat/completions">
-    </div>
-  </div>
-
-  <!-- Progress Tracking -->
+  <!-- Progress Bar Container -->
   <div id="progressContainer" class="progress-wrapper">
     <div class="progress-track">
       <div id="progressBar" class="progress-bar"></div>
     </div>
     <div class="progress-info">
-      <span id="progressText">0%</span>
       <span id="progressStep">Starting...</span>
+      <span id="progressText">0%</span>
     </div>
   </div>
 
-  <!-- Status Bar -->
+  <!-- Status Line -->
   <div id="status" class="status-text">Ready</div>
 
-  <!-- Console Log Terminal -->
+  <!-- Activity Console -->
   <div class="console-box">
     <div class="console-header">
-      <span class="console-title">Live Activity</span>
+      <span class="console-title">Activity</span>
       <div class="console-actions">
-        <button id="openReportBtn" class="btn-tool">📊 Report</button>
-        <button id="copyLogBtn" class="btn-tool">📋 Copy</button>
-        <button id="clearLogBtn" class="btn-tool">🧹 Clear</button>
+        <button id="openReportBtn" class="btn-tool">Report</button>
+        <button id="copyLogBtn" class="btn-tool">Copy</button>
+        <button id="clearLogBtn" class="btn-tool">Clear</button>
       </div>
     </div>
     <div id="log" class="log-stream"></div>
   </div>
 
-  <!-- Modal Summary Report Overlay -->
+  <!-- Course Completion Report Modal -->
   <div id="reportModal">
     <div class="report-header">
-      <h3 style="font-size: 13px; color: #38bdf8; font-weight: 700;">📊 Course Completion Report</h3>
-      <button id="closeReportBtn" class="btn-tool" style="padding: 3px 9px;">✕ Close</button>
+      <span class="report-title">Course Completion Report</span>
+      <button id="closeReportBtn" class="btn-tool">✕ Close</button>
     </div>
     <div id="reportBody">
-      <div style="text-align: center; color: #64748b; font-size: 11px; padding: 25px 0;">
+      <div style="text-align: center; color: var(--text-muted); font-size: 11px; padding: 25px 0;">
         Run "Complete Course" to generate the full completion report.
       </div>
     </div>
-    <button id="copyReportBtn" class="btn-hero" style="margin-top: 10px; display: none;">📋 Copy Full Report</button>
+    <button id="copyReportBtn" class="btn-hero" style="margin-top: 10px; display: none;">Copy Full Report</button>
   </div>
 
-  <!-- On-Screen Solve Mode Selection Modal -->
-  <div id="solveModeModal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(6px); z-index: 1000; padding: 20px; flex-direction: column; justify-content: center;">
-    <div style="background: #0b0f19; border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 12px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.8);">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-        <h3 style="font-size: 13px; color: #38bdf8; font-weight: 700; margin: 0;">🎯 On-Screen Quiz Solver</h3>
-        <button id="closeSolveModeBtn" class="btn-tool" style="padding: 2px 7px;">✕</button>
+  <!-- On-Screen Solver Confirmation Modal -->
+  <div id="solveModeModal">
+    <div class="modal-dialog">
+      <div class="modal-dialog-header">
+        <span class="modal-dialog-title">On-Screen Quiz Solver</span>
+        <button id="closeSolveModeBtn" class="btn-tool" style="padding: 2px 6px;">✕</button>
       </div>
-      <p style="font-size: 11px; color: #94a3b8; margin: 0 0 14px 0; line-height: 1.4;">
-        Choose your submission preference before starting:
+      <p class="modal-dialog-desc">
+        Choose your submission preference for this assessment:
       </p>
-      <div style="display: flex; flex-direction: column; gap: 8px;">
-        <button id="solveAndSubmitBtn" class="btn-hero" style="font-size: 12px; padding: 10px 12px; background: linear-gradient(135deg, #2563eb, #1d4ed8); border: 1px solid rgba(59, 130, 246, 0.6); text-align: left; display: flex; flex-direction: column; gap: 2px; cursor: pointer;">
-          <span style="font-weight: 700; color: #ffffff;">🚀 Answer & Auto-Submit</span>
-          <span style="font-size: 10px; color: #93c5fd; font-weight: 400;">Answers questions, accepts terms & honor code, and submits quiz.</span>
+      <div>
+        <button id="solveAndSubmitBtn" class="modal-choice-btn choice-primary">
+          <span class="choice-title">Solve & Auto-Submit</span>
+          <span class="choice-sub">Answers all questions, accepts honor code & submits quiz.</span>
         </button>
-        <button id="solveAndDraftBtn" class="btn-action" style="font-size: 12px; padding: 10px 12px; background: rgba(30, 41, 59, 0.85); border: 1px solid rgba(148, 163, 184, 0.3); color: #f1f5f9; text-align: left; display: flex; flex-direction: column; gap: 2px; cursor: pointer;">
-          <span style="font-weight: 700; color: #38bdf8;">💾 Answer & Save as Draft Only</span>
-          <span style="font-size: 10px; color: #94a3b8; font-weight: 400;">Fills all answers on screen for you to review manually before submitting.</span>
+        <button id="solveAndDraftBtn" class="modal-choice-btn choice-secondary">
+          <span class="choice-title">Solve & Save Draft</span>
+          <span class="choice-sub">Selects answers on screen for you to review manually.</span>
         </button>
       </div>
     </div>

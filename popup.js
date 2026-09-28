@@ -240,28 +240,28 @@ function renderSummaryReport(data) {
         <div class="report-card">
             <div class="report-header">
                 <div>
-                    <div style="font-size: 13px; font-weight: 700; color: #ffffff;">${courseTitle}</div>
-                    <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">Completed ${completedItems} of ${totalItems} items</div>
+                    <div style="font-size: 12px; font-weight: 600; color: #f4f4f6;">${courseTitle}</div>
+                    <div style="font-size: 10px; color: #8e929e; margin-top: 2px;">Completed ${completedItems} of ${totalItems} items</div>
                 </div>
-                <div class="report-percent">${percent}%</div>
+                <div style="font-size: 12px; font-weight: 600; color: #f4f4f6;">${percent}%</div>
             </div>
-            <div style="background: #334155; border-radius: 9999px; height: 6px; overflow: hidden; margin-top: 8px;">
-                <div style="background: linear-gradient(90deg, #3b82f6, #10b981); height: 100%; width: ${percent}%;"></div>
+            <div style="background: rgba(255, 255, 255, 0.08); border-radius: 9999px; height: 4px; overflow: hidden; margin-top: 8px;">
+                <div style="background: #2563eb; height: 100%; width: ${percent}%;"></div>
             </div>
         </div>
 
         <div class="report-card">
-            <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">📁 Modules Coverage</div>
+            <div style="font-size: 9.5px; font-weight: 600; color: #8e929e; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">Module Coverage</div>
     `;
 
     (modules || []).forEach((m, idx) => {
         const isDone = m.completedCount >= m.totalCount;
         const badgeClass = isDone ? 'badge-done' : 'badge-progress';
-        const badgeText = isDone ? '100% DONE' : `${m.percent}% (${m.completedCount}/${m.totalCount})`;
+        const badgeText = isDone ? '100%' : `${m.percent}% (${m.completedCount}/${m.totalCount})`;
 
         html += `
             <div class="module-row">
-                <span style="color: #cbd5e1; max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;">
+                <span style="color: #d4d4d8; max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;">
                     ${idx + 1}. ${m.moduleName}
                 </span>
                 <span class="report-badge ${badgeClass}">${badgeText}</span>
@@ -273,19 +273,19 @@ function renderSummaryReport(data) {
 
     if (manualAttentionItems && manualAttentionItems.length > 0) {
         html += `
-            <div class="report-card" style="border-left: 3px solid #ef4444; background: rgba(239, 68, 68, 0.08);">
-                <div style="font-size: 11px; font-weight: 700; color: #f87171; margin-bottom: 4px;">⚠️ Attention Required (${manualAttentionItems.length})</div>
-                <div style="font-size: 9px; color: #fca5a5; margin-bottom: 8px; line-height: 1.4;">
+            <div class="report-card" style="border-left: 2px solid #ef4444; background: rgba(239, 68, 68, 0.06);">
+                <div style="font-size: 10.5px; font-weight: 600; color: #f87171; margin-bottom: 4px;">Attention Required (${manualAttentionItems.length})</div>
+                <div style="font-size: 9.5px; color: #a1a1aa; margin-bottom: 8px; line-height: 1.4;">
                     The following items are locked or require manual submission before final graded assessments can unlock:
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 6px;">
         `;
         manualAttentionItems.forEach(item => {
             html += `
-                <div style="font-size: 9px; background: rgba(0, 0, 0, 0.35); padding: 6px; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.25);">
-                    <div style="font-weight: 700; color: #ffffff;">• [${item.moduleName || 'Module'}] ${item.name}</div>
-                    <div style="color: #cbd5e1; margin: 2px 0;">Reason: ${item.reason}</div>
-                    <a href="${item.itemUrl}" target="_blank" style="color: #38bdf8; text-decoration: underline; font-weight: 600;">🔗 Open in Coursera →</a>
+                <div style="font-size: 9.5px; background: rgba(0, 0, 0, 0.25); padding: 6px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.06);">
+                    <div style="font-weight: 600; color: #ffffff;">[${item.moduleName || 'Module'}] ${item.name}</div>
+                    <div style="color: #a1a1aa; margin: 2px 0;">Reason: ${item.reason}</div>
+                    <a href="${item.itemUrl}" target="_blank" style="color: #60a5fa; text-decoration: none; font-weight: 500;">Open item →</a>
                 </div>
             `;
         });
@@ -295,15 +295,15 @@ function renderSummaryReport(data) {
     if (categories) {
         html += `
             <div class="report-card">
-                <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">📋 Category Summary</div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 10px; color: #cbd5e1;">
-                    <div>🎬 Videos: <b>${categories.videos || 0}</b></div>
-                    <div>📖 Readings: <b>${categories.readings || 0}</b></div>
-                    <div>💬 Discussions: <b>${categories.discussions || 0}</b></div>
-                    <div>🎭 Dialogues: <b>${categories.dialogues || 0}</b></div>
-                    <div>🧪 Labs & Apps: <b>${categories.labs || 0}</b></div>
-                    <div>📝 Quizzes: <b>${categories.quizzes || 0}</b></div>
-                    <div>🎯 Graded: <b>${categories.graded || 0}</b></div>
+                <div style="font-size: 9.5px; font-weight: 600; color: #8e929e; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">Categories</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 10px; color: #a1a1aa;">
+                    <div>Videos: <b style="color: #f4f4f6;">${categories.videos || 0}</b></div>
+                    <div>Readings: <b style="color: #f4f4f6;">${categories.readings || 0}</b></div>
+                    <div>Discussions: <b style="color: #f4f4f6;">${categories.discussions || 0}</b></div>
+                    <div>Dialogues: <b style="color: #f4f4f6;">${categories.dialogues || 0}</b></div>
+                    <div>Labs & Apps: <b style="color: #f4f4f6;">${categories.labs || 0}</b></div>
+                    <div>Quizzes: <b style="color: #f4f4f6;">${categories.quizzes || 0}</b></div>
+                    <div>Graded: <b style="color: #f4f4f6;">${categories.graded || 0}</b></div>
                 </div>
             </div>
         `;
@@ -311,15 +311,15 @@ function renderSummaryReport(data) {
 
     if (remainingItems && remainingItems.length > 0) {
         html += `
-            <div class="report-card" style="border-left: 3px solid #f59e0b;">
-                <div style="font-size: 10px; font-weight: 700; color: #fde047; margin-bottom: 6px;">⏳ Remaining Items (${remainingItems.length})</div>
-                <div style="font-size: 9px; color: #94a3b8; line-height: 1.5;">
+            <div class="report-card" style="border-left: 2px solid #f59e0b;">
+                <div style="font-size: 9.5px; font-weight: 600; color: #fbbf24; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Remaining Items (${remainingItems.length})</div>
+                <div style="font-size: 9.5px; color: #a1a1aa; line-height: 1.5;">
         `;
         remainingItems.slice(0, 8).forEach(item => {
             html += `<div>• [${item.moduleName || 'Module'}] <b>${item.name}</b> (${item.typeName || 'item'})</div>`;
         });
         if (remainingItems.length > 8) {
-            html += `<div style="font-style: italic; margin-top: 4px; color: #64748b;">+ ${remainingItems.length - 8} more items</div>`;
+            html += `<div style="font-style: italic; margin-top: 4px; color: #52525b;">+ ${remainingItems.length - 8} more items</div>`;
         }
         html += `</div></div>`;
     } else {
@@ -549,9 +549,9 @@ document.getElementById('readBtn').addEventListener('click', async () => {
         if (courseraSection) courseraSection.style.display = 'none';
         if (aiSettingsSection) aiSettingsSection.style.display = 'none';
         if (platformTag) {
-            platformTag.innerText = "LinkedIn Learning";
-            platformTag.style.color = "#38bdf8";
-            platformTag.style.borderColor = "rgba(56, 189, 248, 0.4)";
+            platformTag.innerText = "LinkedIn";
+            platformTag.style.color = "";
+            platformTag.style.borderColor = "";
         }
         document.getElementById('status').innerText = "Ready on LinkedIn Learning";
     } else if (isCoursera) {
@@ -559,7 +559,9 @@ document.getElementById('readBtn').addEventListener('click', async () => {
         if (courseraSection) courseraSection.style.display = 'block';
         if (aiSettingsSection) aiSettingsSection.style.display = 'block';
         if (platformTag) {
-            platformTag.innerText = "v2.2 Pro";
+            platformTag.innerText = "Coursera";
+            platformTag.style.color = "";
+            platformTag.style.borderColor = "";
         }
     } else {
         document.getElementById('status').innerText = "Open Coursera or LinkedIn Learning";

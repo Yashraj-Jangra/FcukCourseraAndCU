@@ -194,12 +194,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         globalState.abortRequested = false;
         globalState.currentAction = "linkedin_video";
         const speed = request.speed || 16.0;
+        const isSingleVideoOnly = request.itemType === 'video' || !!request.singleVideoOnly;
         startLinkedInCourseCompletionProcess({ 
             speed: speed, 
-            singleVideoOnly: false,
+            singleVideoOnly: isSingleVideoOnly,
             isWorkerTab: !!request.isWorkerTab,
             courseId: request.courseId,
-            courseTitle: request.courseTitle
+            courseTitle: request.courseTitle,
+            itemType: request.itemType || 'course'
         }).finally(() => { 
             globalState.isRunning = false;
             globalState.abortRequested = false;
@@ -5363,15 +5365,20 @@ function startTabKeepAliveHeartbeat() {
 }
 
 function isLinkedInLearningPathPage() {
-    return (window.location.pathname || '').toLowerCase().includes('/learning/paths/');
+    const path = (window.location.pathname || '').toLowerCase();
+    return path.includes('/learning/paths/') || 
+           path.includes('/learning/career-paths/') ||
+           (path.includes('/learning/') && !!document.querySelector('.learning-path-header, [class*="learning-path-header"], [data-test-learning-path-item]'));
 }
 
 function detectLinkedInParentPath() {
     try {
         const pathLink = document.querySelector(
             'a[href*="/learning/paths/"], ' +
+            'a[href*="/learning/career-paths/"], ' +
             '[data-control-name="learning_path_breadcrumb"] a, ' +
-            '.learning-path-breadcrumb a'
+            '.learning-path-breadcrumb a, ' +
+            '[class*="breadcrumb"] a[href*="/paths/"]'
         );
         if (pathLink) {
             return {
@@ -5385,102 +5392,215 @@ function detectLinkedInParentPath() {
 }
 
 function scanLinkedInLearningPath() {
-    const pathTitle = (
-        document.querySelector('h1')?.innerText ||
-        document.querySelector('.learning-path-header__title')?.innerText ||
-        document.querySelector('[class*="learning-path"] h1')?.innerText ||
-        document.title || "Learning Path"
-    ).replace(/\| LinkedIn Learning.*$/i, '').trim();
+    const titleCandidates = [
+        document.querySelector('h1')?.innerText,
+        document.querySelector('.learning-path-header__title')?.innerText,
+        document.querySelector('[class*="learning-path"] h1')?.innerText,
+        document.querySelector('[class*="path-header"] h1')?.innerText,
+        document.querySelector('[class*="career-hub"] h1')?.innerText,
+        document.title
+    ];
+    let pathTitle = "Learning Path";
+    for (const t of titleCandidates) {
+        if (t && t.trim().length > 1) {
+            pathTitle = t.replace(/\| LinkedIn Learning.*$/i, '').trim();
+            break;
+        }
+    }
 
-    const pathUrl = window.location.href.split('?')[0];
+    const currentUrlObj = new URL(window.location.href);
+    const enterpriseU = currentUrlObj.searchParams.get('u');
+    const pathUrl = window.location.href;
 
-    // Find all candidate course links inside the learning path
-    const linkCandidates = Array.from(document.querySelectorAll(
-        'a[href*="/learning/"]:not([href*="/paths/"]):not([href*="/topics/"]):not([href*="/me/"]):not([href*="/search"]):not([href*="/feed"]):not([href*="/subscription"])'
-    ));
+    // Strict blacklist of non-course URL slugs to NEVER open navigation or profile pages
+    const NON_COURSE_SLUGS = new Set([
+        'paths', 'career-paths', 'career-hub', 'career-plan',
+        'me', 'my-content', 'in-progress', 'saved', 'history',
+        'topics', 'search', 'feed', 'subscription', 'certificates',
+        'certifications', 'instructors', 'settings', 'help',
+        'browse', 'ai-coaching', 'role-play', 'hands-on', 'hands-on-tech',
+        'login', 'logout', 'signup', 'home', 'mypreferences',
+        'notifications', 'messaging'
+    ]);
 
-    const courseMap = new Map();
-    let indexCounter = 1;
+    // Helper: is link inside navigation/sidebar/header/footer?
+    const isNavigationElement = (el) => {
+        return !!el.closest(
+            'nav, aside, header, footer, ' +
+            '[role="navigation"], [role="banner"], ' +
+            '.global-nav, .sidebar, [class*="sidebar" i], ' +
+            '[class*="navigation" i], [class*="nav-" i], ' +
+            '#app-header, .app-header, ' +
+            '[data-control-name*="nav" i], ' +
+            '.learning-career-hub-nav, [class*="career-hub-nav" i]'
+        );
+    };
 
-    for (const link of linkCandidates) {
+    // Locate the "Content in this Learning Path" section container specifically
+    let contentContainer = null;
+    const allHeadings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, div, span, p, section'));
+    for (const h of allHeadings) {
+        const text = (h.childNodes[0]?.textContent || h.innerText || '').trim().toLowerCase();
+        if (text === 'content in this learning path' || 
+            text.startsWith('content in this learning path') || 
+            text.startsWith('content in this path') || 
+            text.startsWith('content in this career path')) {
+            contentContainer = h.closest('section, [class*="section"], [class*="content"], [class*="learning-path"]') || h.parentElement;
+            break;
+        }
+    }
+
+    if (!contentContainer) {
+        contentContainer = document.querySelector('main, [role="main"], #main-content') || document.body;
+    }
+
+    // Find all links to /learning/ inside the learning path content container
+    const candidateLinks = Array.from(contentContainer.querySelectorAll('a[href*="/learning/"]'));
+    const itemMap = new Map();
+
+    for (const link of candidateLinks) {
         try {
+            if (isNavigationElement(link)) continue;
+
+            // Ignore header actions like "Resume", "Start", "Bookmark", "Share"
+            if (link.closest('.learning-path-header, [class*="header__actions"], [class*="hero"]')) {
+                continue;
+            }
+
             const rawHref = link.getAttribute('href') || link.href;
             if (!rawHref) continue;
 
             const urlObj = new URL(rawHref, window.location.origin);
             const pathname = urlObj.pathname.toLowerCase();
-
             const segments = pathname.split('/').filter(Boolean);
+
             if (segments.length < 2 || segments[0] !== 'learning') continue;
 
-            const courseSlug = segments[1];
-            if (['paths', 'me', 'topics', 'search', 'feed', 'subscription', 'certificates', 'instructors'].includes(courseSlug)) continue;
+            const firstSlug = segments[1];
+            if (NON_COURSE_SLUGS.has(firstSlug)) continue;
 
-            const canonicalUrl = `${window.location.origin}/learning/${courseSlug}`;
+            // Preserve enterprise SSO parameter 'u' (e.g. ?u=92961692 for Chandigarh University)
+            const cleanParams = new URLSearchParams();
+            if (enterpriseU) {
+                cleanParams.set('u', enterpriseU);
+            } else if (urlObj.searchParams.has('u')) {
+                cleanParams.set('u', urlObj.searchParams.get('u'));
+            }
+            const cleanQuery = cleanParams.toString() ? `?${cleanParams.toString()}` : '';
+            const canonicalUrl = `${window.location.origin}${urlObj.pathname}${cleanQuery}`;
+            const dedupeKey = urlObj.pathname.toLowerCase();
 
-            if (!courseMap.has(canonicalUrl)) {
-                // Find parent card / container for title and completion status
-                const card = link.closest(
-                    '.learning-path-item, ' +
-                    '[class*="learning-path-item"], ' +
-                    '[data-test-learning-path-item], ' +
-                    '.content-entity-card, ' +
-                    '.base-card, ' +
-                    'li[class*="path-course"], ' +
-                    'li[class*="course-item"], ' +
-                    'li'
-                ) || link;
+            // Locate parent card container
+            const card = link.closest(
+                '.learning-path-item, [class*="learning-path-item"], ' +
+                '.content-entity-card, [class*="content-entity-card"], ' +
+                '.base-card, [class*="base-card"], ' +
+                'li[class*="path-course"], li[class*="course-item"], ' +
+                'li, article, [class*="card"], [class*="item"]'
+            ) || link;
 
-                // Title extraction
-                let title = link.innerText?.trim() || "";
-                const titleEl = card.querySelector('h2, h3, h4, .base-card__title, .content-entity-card__title, [class*="card-title"]');
-                if (titleEl && titleEl.innerText?.trim()) {
-                    title = titleEl.innerText.trim();
-                }
-                if (!title || title.length < 2) {
-                    title = courseSlug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                }
+            // Card text and ARIA
+            const cardText = (card.innerText || '').toLowerCase();
+            const cardAria = (card.getAttribute('aria-label') || '').toLowerCase();
 
-                // Completion check
-                let isCompleted = false;
-                const checkIcon = card.querySelector(
-                    'svg[data-test-icon*="check" i], ' +
-                    'svg[type="check"], ' +
-                    '[data-test-icon="check-small"], ' +
-                    '[class*="completed" i], ' +
-                    '[class*="is-complete" i]'
-                );
-                const cardText = (card.innerText || '').toLowerCase();
-                const cardAria = (card.getAttribute('aria-label') || '').toLowerCase();
+            // Detect item type: 'course' vs standalone 'video'
+            let itemType = 'course';
+            const typeBadge = card.querySelector(
+                '.content-entity-card__type, [class*="entity-type" i], [class*="content-type" i], [class*="badge" i]'
+            );
+            const badgeText = (typeBadge?.innerText || '').trim().toLowerCase();
 
-                if (checkIcon || 
-                    card.classList.contains('is-complete') || 
-                    card.classList.contains('completed') || 
-                    cardText.includes('completed') || 
-                    cardAria.includes('completed')) {
-                    isCompleted = true;
-                }
+            if (badgeText === 'video' || cardText.includes('from the course:') || segments.length >= 3) {
+                itemType = 'video';
+            } else if (badgeText === 'course') {
+                itemType = 'course';
+            } else {
+                itemType = segments.length >= 3 ? 'video' : 'course';
+            }
 
-                courseMap.set(canonicalUrl, {
-                    id: `course_${courseSlug}`,
-                    slug: courseSlug,
-                    index: indexCounter++,
+            // Extract item title
+            let title = "";
+            const titleEl = card.querySelector(
+                'h2, h3, h4, h5, ' +
+                '.base-card__title, .content-entity-card__title, ' +
+                '[class*="card-title" i], [class*="entity-title" i], ' +
+                '[class*="item-title" i], [class*="title" i]:not([class*="subtitle" i]):not([class*="section" i])'
+            );
+            if (titleEl && titleEl.innerText?.trim()) {
+                title = titleEl.innerText.trim();
+            } else {
+                title = (link.innerText || '').trim();
+            }
+
+            // Clean title of prefixes and suffixes
+            title = title
+                .replace(/^(Course|Video|Audio|Quiz)\s*/i, '')
+                .replace(/\s*(Add to Profile|Completed\s*[\d/.]*)\s*$/i, '')
+                .replace(/\n+/g, ' ')
+                .trim();
+
+            if (!title || title.length < 2) {
+                title = segments[segments.length - 1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            }
+
+            // Extract duration if present (e.g. 1h 13m, 3m 18s)
+            let duration = "";
+            const durMatch = cardText.match(/(\d+\s*h\s*\d+\s*m|\d+\s*h|\d+\s*m\s*\d+\s*s|\d+\s*m|\d+\s*s)/i);
+            if (durMatch) {
+                duration = durMatch[0];
+            }
+
+            // Completion check
+            let isCompleted = false;
+            const checkIcon = card.querySelector(
+                'svg[data-test-icon*="check" i], ' +
+                'svg[type="check"], ' +
+                '[data-test-icon="check-small"], ' +
+                '[class*="completed" i], ' +
+                '[class*="is-complete" i]'
+            );
+
+            if (checkIcon || 
+                card.classList.contains('is-complete') || 
+                card.classList.contains('completed') || 
+                cardText.includes('completed') || 
+                cardAria.includes('completed')) {
+                isCompleted = true;
+            }
+
+            // Deduplicate by clean pathname so multiple links in one card resolve into a single item
+            if (!itemMap.has(dedupeKey)) {
+                itemMap.set(dedupeKey, {
+                    id: `item_${dedupeKey.replace(/[^a-z0-9]/gi, '_')}`,
+                    slug: segments[segments.length - 1],
+                    index: itemMap.size + 1,
                     title: title,
+                    itemType: itemType,
+                    duration: duration,
                     url: canonicalUrl,
                     isCompleted: isCompleted
                 });
+            } else {
+                // If title was missing or shorter in previous link, update with richer title
+                const existing = itemMap.get(dedupeKey);
+                if (title && title.length > existing.title.length && !title.includes('http')) {
+                    existing.title = title;
+                }
+                if (isCompleted) {
+                    existing.isCompleted = true;
+                }
             }
         } catch(e) {}
     }
 
-    const courses = Array.from(courseMap.values());
+    const items = Array.from(itemMap.values());
     return {
         isPath: true,
         pathTitle: pathTitle,
         pathUrl: pathUrl,
-        totalCourses: courses.length,
-        completedCourses: courses.filter(c => c.isCompleted).length,
-        courses: courses
+        totalCourses: items.length,
+        completedCourses: items.filter(c => c.isCompleted).length,
+        courses: items
     };
 }
 
@@ -6378,6 +6498,13 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             if (singleOnly) {
                 log(`[LinkedIn] Single video completion finished.`);
                 showOnScreenHUD("🎉 Video Completed!", "success");
+                if (isWorkerTab && courseId) {
+                    await chrome.runtime.sendMessage({
+                        action: "path_worker_course_completed",
+                        courseId: courseId
+                    }).catch(() => {});
+                    return;
+                }
                 break;
             }
 

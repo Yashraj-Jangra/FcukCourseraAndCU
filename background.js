@@ -320,16 +320,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // 3. Learning Path Orchestrator Controls
     if (request.action === "start_learning_path") {
         const courses = (request.courses || []).map((c, idx) => ({
-            id: c.id || `course_${idx}_${Date.now()}`,
+            id: c.id || `item_${idx}_${Date.now()}`,
             index: idx + 1,
-            title: c.title || `Course ${idx + 1}`,
+            title: c.title || `Item ${idx + 1}`,
             url: c.url,
+            itemType: c.itemType || 'course',
+            duration: c.duration || '',
             status: c.isCompleted ? 'completed' : 'queued',
             tabId: null,
             percent: c.isCompleted ? 100 : 0,
             completedVideos: 0,
             totalVideos: 0,
-            currentItem: c.isCompleted ? 'Already completed' : 'Queued'
+            currentItem: c.isCompleted ? 'Already completed ✓' : 'Queued'
         }));
 
         const concurrency = Math.max(1, Math.min(5, parseInt(request.maxConcurrency, 10) || pathOrchestrator.maxConcurrency || 3));
@@ -491,6 +493,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                         action: "start_linkedin_videos",
                         speed: pathOrchestrator.targetSpeed,
                         isWorkerTab: true,
+                        itemType: course.itemType || 'course',
+                        singleVideoOnly: course.itemType === 'video',
                         courseId: course.id,
                         courseTitle: course.title
                     }, (resp) => {
@@ -505,6 +509,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                                         action: "start_linkedin_videos",
                                         speed: pathOrchestrator.targetSpeed,
                                         isWorkerTab: true,
+                                        itemType: course.itemType || 'course',
+                                        singleVideoOnly: course.itemType === 'video',
                                         courseId: course.id,
                                         courseTitle: course.title
                                     }).catch(() => {});

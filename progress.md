@@ -2,6 +2,24 @@
 
 ## Session Summary (2026-09-28)
 
+- 🐛 **Fix Learning Path Card Scanner, SSO Parameter Stripping & Navigation Tab Hijacking (`content.js`, `background.js`, `popup.js`)**:
+  - **Root Cause Analysis**:
+    - Discovered why worker tabs were opening "Settings | LinkedIn", "Career Path...", and "Your In Progress...":
+      1. `scanLinkedInLearningPath()` previously queried `document.querySelectorAll('a[href*="/learning/"]')` across the entire document without scoping to the content body, mistakenly capturing sidebar navigation links ("My Content" -> `/learning/in-progress`, "Career Paths" -> `/learning/career-paths`, user settings -> `/learning/settings`).
+      2. It truncated URLs to `window.location.origin + '/learning/' + courseSlug`, which stripped:
+         - The enterprise SSO authentication parameter (`?u=92961692` for Chandigarh University). Without `?u=...`, LinkedIn's enterprise auth guard redirected raw course requests to Settings or profile landing pages.
+         - The sub-path for standalone video lessons (e.g. `/learning/becoming-a-product-manager/product-development-process`), turning single 3-minute video lessons into full 5-hour course links.
+  - **Scoped Container Targeting & Strict Navigation Blacklist (`content.js`)**:
+    - Scoped link collection strictly to the container under `"Content in this Learning Path"`.
+    - Added an exhaustive blacklist (`NON_COURSE_SLUGS`: `paths`, `career-paths`, `career-hub`, `me`, `in-progress`, `saved`, `settings`, `topics`, `search`, `certifications`, etc.) and filtered out any element inside `<nav>`, `<aside>`, `<header>`, `<footer>`, `.sidebar`, or `.learning-career-hub-nav`.
+  - **Preserved Enterprise SSO Authentication Parameters (`content.js`)**:
+    - Preserves `?u=${enterpriseU}` on all generated course and video URLs, ensuring worker tabs load with active university/organization authorization without triggering login/settings redirects.
+  - **Differentiated Course vs. Standalone Video Items (`content.js` & `background.js`)**:
+    - Added card-level entity classification: distinguishes between full courses (`itemType: 'course'`) and standalone video lessons (`itemType: 'video'`).
+    - In worker tabs, if an item is a standalone video (`singleVideoOnly: true`), it plays only that specific assigned video to completion at 16x turbo speed, reports `path_worker_course_completed` immediately upon checkmark detection, and cleanly auto-closes the tab.
+  - **Enhanced Worker Tray UI (`popup.js`)**:
+    - Added visual indicators for item types (`📚` for courses, `🎬` for standalone videos) in the live sub-worker tray with accurate total item counts and completion tallies.
+
 - ✨ **LinkedIn Learning Path Multi-Course Parallel Worker Pool & Background Tab Orchestrator (`background.js`, `content.js`, `popup.html`, `popup.js`)**:
   - **Learning Path Orchestration Architecture (`background.js`)**:
     - Built a robust background service worker state machine (`pathOrchestrator`) that manages parallel course execution across entire LinkedIn Learning Paths (`/learning/paths/*`).

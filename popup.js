@@ -492,8 +492,9 @@ function renderPathWorkerState(state) {
 
             const nameSpan = document.createElement('span');
             nameSpan.className = 'worker-name';
-            nameSpan.innerText = `${c.index}. ${c.title}`;
-            nameSpan.title = c.title;
+            const typeIcon = c.itemType === 'video' ? '🎬 ' : '📚 ';
+            nameSpan.innerText = `${c.index}. ${typeIcon}${c.title}`;
+            nameSpan.title = `${c.title} (${c.itemType || 'course'}${c.duration ? ' • ' + c.duration : ''})`;
 
             const badgeSpan = document.createElement('span');
             let badgeClass = 'badge-queued';
@@ -793,7 +794,7 @@ document.getElementById('readBtn').addEventListener('click', async () => {
                     tagEl.className = "context-tag";
                 }
                 const remaining = (ctx.totalCourses || 0) - (ctx.completedCourses || 0);
-                if (subEl) subEl.innerText = `${ctx.totalCourses || 0} courses • ${remaining} to complete`;
+                if (subEl) subEl.innerText = `${ctx.totalCourses || 0} items • ${ctx.completedCourses || 0} completed • ${remaining} remaining`;
                 if (switchBtn) switchBtn.style.display = 'none';
 
                 // Initial render of detected courses list in tray

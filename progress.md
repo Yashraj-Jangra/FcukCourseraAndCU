@@ -487,9 +487,21 @@
   - **Advancement Jump & Failsafe**: When `advanceToNextLinkedInVideo()` fails, the player rescans the TOC and jumps directly to remaining uncompleted lessons rather than prematurely claiming completion.
   - **Worker Failure Reporting**: Secured the `finally` block in `startLinkedInCourseCompletionProcess` to only send `path_worker_course_completed` if completion was explicitly verified; otherwise sends `path_worker_course_failed` to accurately reflect incomplete/errored state.
   - **Orchestrator Resilience**: Added `path_worker_course_failed` handler in `background.js` and `.badge-error` / `.hud-badge-error` UI badges.
+- 🛋️ **Master Page Live Progress Dashboard ("Relax & Watch Progress Live")**:
+  - **In-Page Dashboard (`#fcuk-master-page-banner`)**: Injected into syllabus/hero section of Learning Path Master pages. Features live stat cards (Completed / Total, Active Workers, Playback Speed), concurrency controls, action buttons (`▶️ Start Learning Path`, `⏹️ Stop All Workers`), and a relaxing notice: *"Workers are completing courses in background tabs. Keep this Master tab open."*
+  - **Synchronized Master Floating HUD**: Shows the live path status, active workers, concurrency selector, and relax banner directly on the master tab.
+- 🛡️ **Explicit Start Only & Auto-Opening Bug Fix**:
+  - **Learning Path Auto-Click Bug Fix**: Sanitized button expansion in `scanLinkedInLearningPath()` to filter out buttons containing action keywords (`start`, `resume`, `play`, etc.) so clicking syllabus headers never navigates into a course.
+  - **Master Page Guards**: Added strict guards in `ensureLinkedInVideoPlayerMounted` and `startLinkedInCourseCompletionProcess` to immediately abort video mounting and execution if the page is a Learning Path master page.
+  - **Session-Scoped Storage**: Deprecated global `linkedinQueueRunning` in `chrome.storage.local` to prevent courses from auto-starting on arbitrary tab reloads or page visits. Single course auto-resume is now strictly scoped to `sessionStorage` in the tab where the user explicitly clicked "Start".
+- 🏷️ **Context-Aware Extension Popup & Floating HUD**:
+  - **Master Page Mode**: Displays `"LinkedIn (Master Path)"` title, `"Master Orchestrator"` badge, relax banner, curriculum list, concurrency buttons, and worker status.
+  - **Worker Tab Mode**: Displays `[Worker Tab]` tag, active course assignment, lesson index, 16x speed indicator, 360p quality lock, and notice indicating progress is streaming live to the Master tab.
+  - **Standalone Course Mode**: Displays `Single Course` tag, course title, lesson count, video progress bar, and Start/Stop buttons.
 
 ### What's Planned Next / Future Considerations:
 - Test parallel worker execution across multiple live courses in complex LinkedIn Learning Paths.
 - Add optional user preference toggle in popup for manual video quality preference (360p vs auto).
 - Add automated certificate detection and downloading upon path completion.
+
 

@@ -592,10 +592,37 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (senderTabId && pathOrchestrator.isRunning && pathOrchestrator.activeWorkers.has(senderTabId)) {
             const courseId = pathOrchestrator.activeWorkers.get(senderTabId);
             const course = pathOrchestrator.courses.find(c => c.id === courseId);
-            sendResponse({ isWorker: true, course: course, targetSpeed: pathOrchestrator.targetSpeed });
+            sendResponse({ 
+                isWorker: true, 
+                course: course, 
+                targetSpeed: pathOrchestrator.targetSpeed,
+                pathTitle: pathOrchestrator.pathTitle,
+                pathUrl: pathOrchestrator.pathUrl
+            });
         } else {
             sendResponse({ isWorker: false });
         }
+        return true;
+    }
+
+    if (request.action === "stop_single_worker") {
+        const senderTabId = sender && sender.tab ? sender.tab.id : null;
+        if (senderTabId && pathOrchestrator.activeWorkers.has(senderTabId)) {
+            const courseId = pathOrchestrator.activeWorkers.get(senderTabId);
+            pathOrchestrator.activeWorkers.delete(senderTabId);
+            initializedWorkerTabIds.delete(senderTabId);
+            untrackWorkerTabId(senderTabId);
+            const course = pathOrchestrator.courses.find(c => c.id === courseId);
+            if (course && course.status === 'running') {
+                course.status = 'queued';
+                course.tabId = null;
+                course.currentItem = 'Stopped by user';
+            }
+            savePathState();
+            broadcastPathProgress();
+            chrome.tabs.remove(senderTabId).catch(() => {});
+        }
+        sendResponse({ status: "stopped" });
         return true;
     }
 

@@ -235,10 +235,40 @@
       color: #38bdf8;
       border: 1px solid rgba(2, 132, 199, 0.3);
     }
+    .context-tag.master {
+      background: rgba(2, 132, 199, 0.2);
+      color: #38bdf8;
+      border-color: rgba(2, 132, 199, 0.45);
+    }
+    .context-tag.worker {
+      background: rgba(168, 85, 247, 0.2);
+      color: #c084fc;
+      border-color: rgba(168, 85, 247, 0.45);
+    }
     .context-tag.single {
       background: rgba(16, 185, 129, 0.15);
       color: #34d399;
       border-color: rgba(16, 185, 129, 0.3);
+    }
+    .master-relax-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(2, 132, 199, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      border-radius: var(--radius-md);
+      padding: 7px 10px;
+      margin-bottom: 8px;
+    }
+    .worker-tab-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(168, 85, 247, 0.1);
+      border: 1px solid rgba(168, 85, 247, 0.3);
+      border-radius: var(--radius-md);
+      padding: 7px 10px;
+      margin-bottom: 8px;
     }
     .context-meta {
       font-size: 10px;
@@ -761,6 +791,15 @@
 
     <!-- Learning Path Actions (Visible when on Learning Path) -->
     <div id="linkedinPathControls" style="display: none;">
+      <!-- Master Relax Banner -->
+      <div id="masterRelaxBanner" class="master-relax-banner" style="display: none;">
+        <span style="font-size: 15px; flex-shrink: 0;">🛋️</span>
+        <div style="flex: 1;">
+          <div style="font-weight: 700; color: #38bdf8; font-size: 11px;">Master Orchestrator Live</div>
+          <div style="font-size: 10px; color: #cbd5e1; line-height: 1.3;">Relax and watch live progress! Sub-workers run autonomously in background tabs.</div>
+        </div>
+      </div>
+
       <!-- Concurrency Selector -->
       <div class="concurrency-box">
         <div style="display: flex; align-items: center; gap: 5px;">
@@ -813,8 +852,17 @@
       </div>
     </div>
 
-    <!-- Single Course Actions (Visible when on Single Course) -->
+    <!-- Single Course Actions (Visible when on Single Course or Worker Tab) -->
     <div id="linkedinCourseControls">
+      <!-- Worker Tab Banner -->
+      <div id="workerTabBanner" class="worker-tab-banner" style="display: none;">
+        <span style="font-size: 15px; flex-shrink: 0;">👷</span>
+        <div style="flex: 1;">
+          <div style="font-weight: 700; color: #c084fc; font-size: 11px;">Background Worker Tab</div>
+          <div id="workerTabParentInfo" style="font-size: 10px; color: #cbd5e1; line-height: 1.3;">Working on course for Learning Path. Progress reports live to Master tab.</div>
+        </div>
+      </div>
+
       <button id="linkedinCompleteBtn" class="btn-hero" style="background: #0284c7;">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 19 22 12 13 5 13 19"></polygon><polygon points="2 19 11 12 2 5 2 19"></polygon></svg>
         <span>Complete All Videos</span>

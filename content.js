@@ -41,7 +41,11 @@ let globalState = {
     currentAction: null,
     statusMessage: "Ready",
     progress: { current: 0, total: 0, message: "" },
-    logs: []
+    logs: [],
+    isWorkerTab: false,
+    workerCourse: null,
+    workerParentPathTitle: null,
+    workerParentPathUrl: null
 };
 
 // Helper to log to popup with auto-categorization
@@ -5398,6 +5402,7 @@ function isLinkedInLearningPathPage() {
     const path = (window.location.pathname || '').toLowerCase();
     return path.includes('/learning/paths/') || 
            path.includes('/learning/career-paths/') ||
+           path.includes('/career-hub/learning/path/') ||
            (path.includes('/learning/') && !!document.querySelector('.learning-path-header, [class*="learning-path-header"], [data-test-learning-path-item]'));
 }
 
@@ -5581,7 +5586,11 @@ function scanLinkedInLearningPath() {
             'button[class*="expand" i]'
         ));
         expandButtons.forEach(btn => {
-            if (!isNavigationElement(btn)) btn.click();
+            if (isNavigationElement(btn)) return;
+            const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').toLowerCase();
+            // NEVER click buttons that could launch courses or start learning
+            if (/\b(?:start|resume|play|watch|continue|enroll|take|open)\b/i.test(btnText)) return;
+            btn.click();
         });
     } catch(e) {}
 
@@ -5781,6 +5790,7 @@ function getLinkedInContext() {
         return {
             platform: "linkedin",
             isPathPage: true,
+            isWorkerTab: false,
             pathTitle: pathData.pathTitle,
             pathUrl: pathData.pathUrl,
             courses: pathData.courses,
@@ -5793,15 +5803,359 @@ function getLinkedInContext() {
         return {
             platform: "linkedin",
             isPathPage: false,
+            isWorkerTab: !!globalState.isWorkerTab,
+            workerCourseTitle: globalState.workerCourse ? globalState.workerCourse.title : null,
+            workerParentPathTitle: globalState.workerParentPathTitle || parentPath.pathTitle,
+            workerParentPathUrl: globalState.workerParentPathUrl || parentPath.pathUrl,
             courseTitle: document.title.replace(/\| LinkedIn Learning.*$/i, '').trim(),
             courseUrl: window.location.href,
-            hasParentPath: parentPath.hasParentPath,
-            parentPathUrl: parentPath.pathUrl,
-            parentPathTitle: parentPath.pathTitle,
+            hasParentPath: parentPath.hasParentPath || !!globalState.workerParentPathTitle,
+            parentPathUrl: parentPath.pathUrl || globalState.workerParentPathUrl,
+            parentPathTitle: parentPath.pathTitle || globalState.workerParentPathTitle,
             totalVideos: toc.totalCount,
             completedVideos: toc.completedCount
         };
     }
+}
+
+// =========================================================================
+// Master Page In-Page Banner ("Relax & Watch Progress Live")
+// =========================================================================
+function renderMasterPageBanner(state = null) {
+    if (!isLinkedInLearningPathPage()) return;
+    let banner = document.getElementById('fcuk-master-page-banner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'fcuk-master-page-banner';
+        banner.innerHTML = `
+            <style>
+                #fcuk-master-page-banner {
+                    margin: 16px auto;
+                    max-width: 1200px;
+                    padding: 14px 18px;
+                    background: linear-gradient(135deg, rgba(14, 16, 21, 0.96) 0%, rgba(20, 27, 45, 0.96) 100%);
+                    border: 1px solid rgba(56, 189, 248, 0.35);
+                    border-radius: 12px;
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 15px rgba(2, 132, 199, 0.2);
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 16px;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    color: #f4f4f6;
+                    z-index: 9999;
+                    position: relative;
+                }
+                .fcuk-banner-left {
+                    display: flex;
+                    align-items: center;
+                    gap: 14px;
+                }
+                .fcuk-banner-icon {
+                    font-size: 26px;
+                    flex-shrink: 0;
+                    line-height: 1;
+                }
+                .fcuk-banner-title-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    margin-bottom: 4px;
+                }
+                .fcuk-banner-title {
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #ffffff;
+                }
+                .fcuk-banner-live-tag {
+                    font-size: 9.5px;
+                    font-weight: 700;
+                    letter-spacing: 0.5px;
+                    padding: 2px 7px;
+                    border-radius: 9999px;
+                    background: rgba(16, 185, 129, 0.2);
+                    color: #34d399;
+                    border: 1px solid rgba(16, 185, 129, 0.4);
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                }
+                .fcuk-banner-live-tag.busy {
+                    background: rgba(2, 132, 199, 0.25);
+                    color: #38bdf8;
+                    border-color: rgba(56, 189, 248, 0.5);
+                }
+                .fcuk-banner-sub {
+                    font-size: 11.5px;
+                    color: #cbd5e1;
+                    line-height: 1.4;
+                    margin-bottom: 6px;
+                }
+                .fcuk-banner-stats-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    font-size: 11px;
+                }
+                .fcuk-banner-stat-pill {
+                    background: rgba(255, 255, 255, 0.06);
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                    border-radius: 5px;
+                    padding: 3px 8px;
+                    color: #94a3b8;
+                    font-weight: 500;
+                }
+                .fcuk-banner-stat-pill strong {
+                    color: #38bdf8;
+                }
+                .fcuk-banner-btn-start {
+                    padding: 9px 18px;
+                    background: #0284c7;
+                    border: 1px solid #38bdf8;
+                    border-radius: 8px;
+                    color: #ffffff;
+                    font-size: 12px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    white-space: nowrap;
+                    transition: background 0.15s ease;
+                    box-shadow: 0 4px 12px rgba(2, 132, 199, 0.35);
+                }
+                .fcuk-banner-btn-start:hover {
+                    background: #0369a1;
+                }
+                .fcuk-banner-btn-stop {
+                    padding: 9px 18px;
+                    background: rgba(239, 68, 68, 0.18);
+                    border: 1px solid rgba(239, 68, 68, 0.4);
+                    border-radius: 8px;
+                    color: #f87171;
+                    font-size: 12px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    white-space: nowrap;
+                    transition: background 0.15s ease;
+                }
+                .fcuk-banner-btn-stop:hover {
+                    background: rgba(239, 68, 68, 0.28);
+                }
+            </style>
+            <div class="fcuk-banner-left">
+                <div class="fcuk-banner-icon">🛋️</div>
+                <div>
+                    <div class="fcuk-banner-title-row">
+                        <span class="fcuk-banner-title">Master Learning Path Dashboard</span>
+                        <span class="fcuk-banner-live-tag" id="fcukBannerLiveTag">● MASTER ORCHESTRATOR</span>
+                    </div>
+                    <div class="fcuk-banner-sub">
+                        Relax & watch progress live! Workers run in background tabs. Keep this Master tab open.
+                    </div>
+                    <div class="fcuk-banner-stats-row">
+                        <span class="fcuk-banner-stat-pill" id="fcukBannerStatCourses">Courses: <strong>0/0 (0%)</strong></span>
+                        <span class="fcuk-banner-stat-pill" id="fcukBannerStatWorkers">Workers: <strong>0 active</strong></span>
+                        <span class="fcuk-banner-stat-pill" id="fcukBannerStatSpeed">Speed: <strong>16x Turbo</strong></span>
+                    </div>
+                </div>
+            </div>
+            <div class="fcuk-banner-right">
+                <button class="fcuk-banner-btn-start" id="fcukBannerStartBtn">▶️ Start Learning Path</button>
+                <button class="fcuk-banner-btn-stop" id="fcukBannerStopBtn" style="display: none;">⏹️ Stop All Workers</button>
+            </div>
+        `;
+
+        const targetContainer = document.querySelector(
+            '.learning-path-header, [class*="learning-path-header"], .learning-career-hub-header, [class*="career-hub-header"], main, #main-content, body'
+        );
+        if (targetContainer) {
+            if (targetContainer === document.body) {
+                targetContainer.prepend(banner);
+            } else {
+                targetContainer.parentElement.insertBefore(banner, targetContainer);
+            }
+        }
+
+        const startBtn = banner.querySelector('#fcukBannerStartBtn');
+        const stopBtn = banner.querySelector('#fcukBannerStopBtn');
+
+        if (startBtn) {
+            startBtn.addEventListener('click', () => {
+                const hudStartBtn = document.getElementById('hudStartBtn');
+                if (hudStartBtn) {
+                    hudStartBtn.click();
+                } else {
+                    const pathData = scanLinkedInLearningPath();
+                    chrome.runtime.sendMessage({
+                        action: "start_learning_path",
+                        pathTitle: pathData.pathTitle || "Learning Path",
+                        pathUrl: window.location.href,
+                        courses: pathData.courses,
+                        maxConcurrency: 3,
+                        speed: 16.0
+                    });
+                }
+            });
+        }
+
+        if (stopBtn) {
+            stopBtn.addEventListener('click', () => {
+                chrome.runtime.sendMessage({ action: "stop_learning_path" });
+            });
+        }
+    }
+
+    if (state) {
+        const total = state.totalCourses || 0;
+        const completed = state.completedCourses || 0;
+        const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+        const activeCount = state.activeWorkerCount || 0;
+        const isRunning = !!state.isRunning;
+
+        const statCourses = banner.querySelector('#fcukBannerStatCourses');
+        if (statCourses) statCourses.innerHTML = `Courses: <strong>${completed}/${total} (${pct}%)</strong>`;
+
+        const statWorkers = banner.querySelector('#fcukBannerStatWorkers');
+        if (statWorkers) statWorkers.innerHTML = `Workers: <strong>${activeCount} active</strong>`;
+
+        const statSpeed = banner.querySelector('#fcukBannerStatSpeed');
+        if (statSpeed && state.targetSpeed) statSpeed.innerHTML = `Speed: <strong>${state.targetSpeed}x Turbo</strong>`;
+
+        const liveTag = banner.querySelector('#fcukBannerLiveTag');
+        if (liveTag) {
+            if (isRunning) {
+                liveTag.classList.add('busy');
+                liveTag.innerHTML = `● LIVE: ${activeCount} WORKER${activeCount === 1 ? '' : 'S'} RUNNING`;
+            } else {
+                liveTag.classList.remove('busy');
+                liveTag.innerHTML = `● MASTER ORCHESTRATOR`;
+            }
+        }
+
+        const startBtn = banner.querySelector('#fcukBannerStartBtn');
+        const stopBtn = banner.querySelector('#fcukBannerStopBtn');
+        if (startBtn && stopBtn) {
+            if (isRunning) {
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'inline-block';
+            } else {
+                if (total > 0 && completed >= total) {
+                    startBtn.style.display = 'none';
+                    stopBtn.style.display = 'none';
+                } else {
+                    startBtn.style.display = 'inline-block';
+                    startBtn.innerText = `▶️ Start Learning Path (${total - completed} courses)`;
+                    stopBtn.style.display = 'none';
+                }
+            }
+        }
+    }
+}
+
+function renderWorkerHudState(course, speed = 16.0, currentItem = null, completedVideos = 0, totalVideos = 0) {
+    if (!floatingHudEl) {
+        createLinkedInFloatingHUD();
+    }
+    const hud = floatingHudEl;
+    if (!hud) return;
+
+    hud.style.display = 'block';
+
+    const titleEl = hud.querySelector('#hudTitle');
+    const dot = hud.querySelector('#hudStatusDot');
+    const pillStats = hud.querySelector('#hudPillStats');
+    const masterBanner = hud.querySelector('#hudMasterRelaxBanner');
+    const workerBanner = hud.querySelector('#hudWorkerTabBanner');
+    const workerSubText = hud.querySelector('#hudWorkerSubText');
+    const startBtn = hud.querySelector('#hudStartBtn');
+    const stopBtn = hud.querySelector('#hudStopBtn');
+    const progressLabel = hud.querySelector('#hudProgressLabel');
+    const progressVal = hud.querySelector('#hudProgressVal');
+    const barFill = hud.querySelector('#hudBarFill');
+    const workerTray = hud.querySelector('#hudWorkerTray');
+    const concurrencyRow = hud.querySelector('#hudConcurrencyRow');
+
+    const courseTitle = course?.title || document.title.replace(/\| LinkedIn Learning.*$/i, '').trim();
+    if (titleEl) titleEl.innerText = `Worker: ${courseTitle}`;
+    if (dot) dot.classList.add('busy');
+    if (pillStats) pillStats.innerText = `Worker Tab • ${speed}x`;
+
+    if (masterBanner) masterBanner.style.display = 'none';
+    if (workerBanner) {
+        workerBanner.style.display = 'flex';
+        if (workerSubText) {
+            const parentTitle = globalState.workerParentPathTitle || "Learning Path";
+            workerSubText.innerText = `Completing course for "${parentTitle}". Progress reports live to Master Tab.`;
+        }
+    }
+
+    if (startBtn) startBtn.style.display = 'none';
+    if (stopBtn) {
+        stopBtn.style.display = 'block';
+        stopBtn.innerText = "Stop This Worker";
+    }
+
+    if (concurrencyRow) concurrencyRow.style.display = 'none';
+    if (workerTray) workerTray.style.display = 'none';
+
+    if (progressLabel) progressLabel.innerText = currentItem ? `Lesson: ${currentItem}` : "Course Progress";
+    const pct = totalVideos > 0 ? Math.round((completedVideos / totalVideos) * 100) : 0;
+    if (progressVal) progressVal.innerText = `${pct}% (${completedVideos}/${totalVideos})`;
+    if (barFill) barFill.style.width = `${pct}%`;
+}
+
+function renderSingleCourseHudState(courseTitle, speed = 16.0, currentItem = null, completedVideos = 0, totalVideos = 0, isRunning = false) {
+    if (!floatingHudEl) {
+        createLinkedInFloatingHUD();
+    }
+    const hud = floatingHudEl;
+    if (!hud) return;
+
+    hud.style.display = 'block';
+
+    const titleEl = hud.querySelector('#hudTitle');
+    const dot = hud.querySelector('#hudStatusDot');
+    const pillStats = hud.querySelector('#hudPillStats');
+    const masterBanner = hud.querySelector('#hudMasterRelaxBanner');
+    const workerBanner = hud.querySelector('#hudWorkerTabBanner');
+    const startBtn = hud.querySelector('#hudStartBtn');
+    const stopBtn = hud.querySelector('#hudStopBtn');
+    const progressLabel = hud.querySelector('#hudProgressLabel');
+    const progressVal = hud.querySelector('#hudProgressVal');
+    const barFill = hud.querySelector('#hudBarFill');
+    const workerTray = hud.querySelector('#hudWorkerTray');
+    const concurrencyRow = hud.querySelector('#hudConcurrencyRow');
+
+    if (titleEl) titleEl.innerText = `Course: ${courseTitle || "LinkedIn Course"}`;
+    if (dot) {
+        if (isRunning) dot.classList.add('busy');
+        else dot.classList.remove('busy');
+    }
+    if (pillStats) pillStats.innerText = `${completedVideos}/${totalVideos} (${speed}x)`;
+
+    if (masterBanner) masterBanner.style.display = 'none';
+    if (workerBanner) workerBanner.style.display = 'none';
+
+    if (concurrencyRow) concurrencyRow.style.display = 'none';
+    if (workerTray) workerTray.style.display = 'none';
+
+    if (isRunning) {
+        if (startBtn) startBtn.style.display = 'none';
+        if (stopBtn) {
+            stopBtn.style.display = 'block';
+            stopBtn.innerText = "Stop Playback";
+        }
+    } else {
+        if (startBtn) {
+            startBtn.style.display = 'flex';
+            const remaining = Math.max(0, totalVideos - completedVideos);
+            startBtn.innerText = `▶️ Start Course (${remaining} videos)`;
+        }
+        if (stopBtn) stopBtn.style.display = 'none';
+    }
+
+    if (progressLabel) progressLabel.innerText = currentItem ? `Lesson: ${currentItem}` : "Course Progress";
+    const pct = totalVideos > 0 ? Math.round((completedVideos / totalVideos) * 100) : 0;
+    if (progressVal) progressVal.innerText = `${pct}% (${completedVideos}/${totalVideos})`;
+    if (barFill) barFill.style.width = `${pct}%`;
 }
 
 // =========================================================================
@@ -6107,6 +6461,27 @@ function createLinkedInFloatingHUD() {
                 background: #14171f;
                 color: #f4f4f6;
             }
+            .hud-btn-start {
+                width: 100%;
+                padding: 7px;
+                border-radius: 6px;
+                font-size: 10.5px;
+                font-weight: 700;
+                background: #0284c7;
+                border: 1px solid rgba(56, 189, 248, 0.4);
+                color: #ffffff;
+                cursor: pointer;
+                transition: all 0.12s ease;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 6px;
+                box-shadow: 0 4px 12px rgba(2, 132, 199, 0.35);
+            }
+            .hud-btn-start:hover {
+                background: #0369a1;
+                border-color: #38bdf8;
+            }
             .hud-btn-stop {
                 width: 100%;
                 padding: 6px;
@@ -6122,6 +6497,24 @@ function createLinkedInFloatingHUD() {
             .hud-btn-stop:hover {
                 background: rgba(239, 68, 68, 0.2);
                 border-color: rgba(239, 68, 68, 0.5);
+            }
+            .hud-relax-banner {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                background: rgba(2, 132, 199, 0.12);
+                border: 1px solid rgba(56, 189, 248, 0.35);
+                border-radius: 6px;
+                padding: 6px 9px;
+            }
+            .hud-worker-banner {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                background: rgba(168, 85, 247, 0.12);
+                border: 1px solid rgba(168, 85, 247, 0.35);
+                border-radius: 6px;
+                padding: 6px 9px;
             }
             .hud-notice-banner {
                 display: none;
@@ -6204,6 +6597,24 @@ function createLinkedInFloatingHUD() {
 
         <!-- Body -->
         <div class="hud-body">
+            <!-- Master Relax Banner (Master Page) -->
+            <div class="hud-relax-banner" id="hudMasterRelaxBanner" style="display: none;">
+                <span style="font-size: 15px; flex-shrink: 0;">🛋️</span>
+                <div style="flex: 1;">
+                    <div style="font-weight: 700; color: #38bdf8; font-size: 10.5px;">Relax & Watch Progress Live</div>
+                    <div style="font-size: 9.5px; color: #cbd5e1; line-height: 1.3;">Workers run in background tabs. Keep this Master tab open.</div>
+                </div>
+            </div>
+
+            <!-- Worker Tab Banner (Worker Page) -->
+            <div class="hud-worker-banner" id="hudWorkerTabBanner" style="display: none;">
+                <span style="font-size: 15px; flex-shrink: 0;">👷</span>
+                <div style="flex: 1;">
+                    <div style="font-weight: 700; color: #c084fc; font-size: 10.5px;">Background Worker Active</div>
+                    <div id="hudWorkerSubText" style="font-size: 9.5px; color: #cbd5e1; line-height: 1.3;">Completing course for Learning Path. Progress reports live to Master tab.</div>
+                </div>
+            </div>
+
             <!-- Notice Banner (Smart Auto-Throttle) -->
             <div class="hud-notice-banner" id="hudNoticeBanner">
                 <span class="hud-notice-icon">⚠️</span>
@@ -6231,7 +6642,7 @@ function createLinkedInFloatingHUD() {
             </div>
 
             <!-- Controls Row: Concurrency + Speed -->
-            <div class="hud-controls-row">
+            <div class="hud-controls-row" id="hudConcurrencyRow">
                 <div style="display: flex; align-items: center; gap: 4px;">
                     <span style="font-size: 9px; color: #8e929e;">Tabs:</span>
                     <div class="hud-pill-group" id="hudConcurrencyPills">
@@ -6255,8 +6666,11 @@ function createLinkedInFloatingHUD() {
                 </div>
             </div>
 
-            <!-- Stop Button -->
-            <button class="hud-btn-stop" id="hudStopBtn">Stop All Workers</button>
+            <!-- Start Button (Shown when Idle) -->
+            <button class="hud-btn-start" id="hudStartBtn" style="display: none;">▶️ Start Learning Path</button>
+
+            <!-- Stop Button (Shown when Running) -->
+            <button class="hud-btn-stop" id="hudStopBtn" style="display: none;">Stop All Workers</button>
         </div>
     `;
 
@@ -6438,16 +6852,72 @@ function attachHudControls(hud) {
         });
     }
 
+    // Start button
+    const startBtn = hud.querySelector('#hudStartBtn');
+    if (startBtn) {
+        startBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (isLinkedInLearningPathPage()) {
+                startBtn.innerText = "Spawning Workers...";
+                startBtn.disabled = true;
+                const pathData = scanLinkedInLearningPath();
+                if (!pathData.courses || pathData.courses.length === 0) {
+                    startBtn.innerText = "No courses detected";
+                    setTimeout(() => { startBtn.innerText = "▶️ Start Learning Path"; startBtn.disabled = false; }, 2000);
+                    return;
+                }
+                const activePill = hud.querySelector('.hud-pill.active');
+                const concurrency = activePill ? parseInt(activePill.getAttribute('data-conc'), 10) || 3 : 3;
+                const speedSelect = hud.querySelector('#hudSpeedSelect');
+                const speed = speedSelect ? parseFloat(speedSelect.value) || 16.0 : 16.0;
+
+                chrome.runtime.sendMessage({
+                    action: "start_learning_path",
+                    pathTitle: pathData.pathTitle || "Learning Path",
+                    pathUrl: window.location.href,
+                    courses: pathData.courses,
+                    maxConcurrency: concurrency,
+                    speed: speed
+                }, () => {
+                    startBtn.style.display = 'none';
+                    const stopBtn = hud.querySelector('#hudStopBtn');
+                    if (stopBtn) stopBtn.style.display = 'block';
+                });
+            } else {
+                startBtn.style.display = 'none';
+                const speedSelect = hud.querySelector('#hudSpeedSelect');
+                const speed = speedSelect ? parseFloat(speedSelect.value) || 16.0 : 16.0;
+                globalState.isRunning = true;
+                startLinkedInCourseCompletionProcess({ speed: speed, singleVideoOnly: false });
+            }
+        });
+    }
+
     // Stop button
     const stopBtn = hud.querySelector('#hudStopBtn');
     if (stopBtn) {
         stopBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            stopBtn.innerText = "Stopping...";
-            chrome.runtime.sendMessage({ action: "stop_learning_path" }, () => {
-                stopBtn.innerText = "Stopped";
-                setTimeout(() => { stopBtn.innerText = "Stop All Workers"; }, 2000);
-            });
+            if (globalState.isWorkerTab) {
+                stopBtn.innerText = "Stopping Worker...";
+                chrome.runtime.sendMessage({ action: "stop_single_worker" }).catch(() => {});
+                stopLinkedInVideoPlayback();
+            } else if (isLinkedInLearningPathPage()) {
+                stopBtn.innerText = "Stopping...";
+                chrome.runtime.sendMessage({ action: "stop_learning_path" }, () => {
+                    stopBtn.innerText = "Stopped";
+                    setTimeout(() => { stopBtn.innerText = "Stop All Workers"; }, 2000);
+                });
+            } else {
+                stopBtn.innerText = "Stopping...";
+                stopLinkedInVideoPlayback();
+                globalState.isRunning = false;
+                globalState.abortRequested = true;
+                setTimeout(() => {
+                    stopBtn.style.display = 'none';
+                    if (startBtn) startBtn.style.display = 'block';
+                }, 1000);
+            }
         });
     }
 
@@ -6472,34 +6942,74 @@ function renderFloatingHudState(state) {
 
     hud.style.display = 'block';
 
+    const isPath = isLinkedInLearningPathPage();
     const titleEl = hud.querySelector('#hudTitle');
     const dot = hud.querySelector('#hudStatusDot');
+    const progressLabel = hud.querySelector('#hudProgressLabel');
     const progressVal = hud.querySelector('#hudProgressVal');
     const barFill = hud.querySelector('#hudBarFill');
     const activeCount = hud.querySelector('#hudActiveCount');
     const workerList = hud.querySelector('#hudWorkerList');
     const pillStats = hud.querySelector('#hudPillStats');
     const speedSelect = hud.querySelector('#hudSpeedSelect');
+    const masterBanner = hud.querySelector('#hudMasterRelaxBanner');
+    const workerBanner = hud.querySelector('#hudWorkerTabBanner');
+    const startBtn = hud.querySelector('#hudStartBtn');
+    const stopBtn = hud.querySelector('#hudStopBtn');
+    const workerTray = hud.querySelector('#hudWorkerTray');
+    const concurrencyRow = hud.querySelector('#hudConcurrencyRow');
 
-    if (titleEl) titleEl.innerText = state.pathTitle || "Learning Path";
-    if (dot) {
-        if (state.isRunning) dot.classList.add('busy');
-        else dot.classList.remove('busy');
-    }
+    if (isPath) {
+        if (titleEl) titleEl.innerText = state.pathTitle || "LinkedIn Learning Path";
+        if (masterBanner) masterBanner.style.display = 'flex';
+        if (workerBanner) workerBanner.style.display = 'none';
+        if (workerTray) workerTray.style.display = 'flex';
+        if (concurrencyRow) concurrencyRow.style.display = 'flex';
+        if (progressLabel) progressLabel.innerText = "Learning Path Progress";
 
-    const total = state.totalCourses || 0;
-    const completed = state.completedCourses || 0;
-    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-    if (progressVal) progressVal.innerText = `${pct}% (${completed}/${total})`;
-    if (barFill) barFill.style.width = `${pct}%`;
-    if (activeCount) activeCount.innerText = String(state.activeWorkerCount || 0);
-    if (pillStats) {
-        if (state.throttleNotice) {
-            pillStats.innerText = `⚠️ ${state.maxConcurrency || 1} tab${(state.maxConcurrency || 1) > 1 ? 's' : ''} (throttled) • ${completed}/${total}`;
-        } else {
-            pillStats.innerText = `⚡ ${state.targetSpeed || 16}x • ${completed}/${total} (${pct}%)`;
+        if (dot) {
+            if (state.isRunning) dot.classList.add('busy');
+            else dot.classList.remove('busy');
         }
+
+        const total = state.totalCourses || 0;
+        const completed = state.completedCourses || 0;
+        const remaining = Math.max(0, total - completed);
+        const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        if (progressVal) progressVal.innerText = `${pct}% (${completed}/${total})`;
+        if (barFill) barFill.style.width = `${pct}%`;
+        if (activeCount) activeCount.innerText = String(state.activeWorkerCount || 0);
+
+        if (pillStats) {
+            if (state.throttleNotice) {
+                pillStats.innerText = `⚠️ ${state.maxConcurrency || 1} tab${(state.maxConcurrency || 1) > 1 ? 's' : ''} (throttled) • ${completed}/${total}`;
+            } else {
+                pillStats.innerText = `🛋️ Master • ${completed}/${total} (${pct}%)`;
+            }
+        }
+
+        if (state.isRunning) {
+            if (startBtn) startBtn.style.display = 'none';
+            if (stopBtn) {
+                stopBtn.style.display = 'block';
+                stopBtn.innerText = "Stop All Workers";
+            }
+        } else {
+            if (total > 0 && completed >= total) {
+                if (startBtn) startBtn.style.display = 'none';
+                if (stopBtn) stopBtn.style.display = 'none';
+            } else {
+                if (startBtn) {
+                    startBtn.style.display = 'flex';
+                    startBtn.innerText = `▶️ Start Learning Path (${remaining} courses)`;
+                }
+                if (stopBtn) stopBtn.style.display = 'none';
+            }
+        }
+
+        // Sync with In-Page Master Dashboard Banner
+        renderMasterPageBanner(state);
     }
 
     // Notice banner rendering
@@ -6722,6 +7232,10 @@ function triggerLinkedInNativePlay(video) {
 }
 
 async function ensureLinkedInVideoPlayerMounted(maxWaitMs = 12000) {
+    if (isLinkedInLearningPathPage()) {
+        log("[LinkedIn] Current page is a Learning Path Master Page. Video player mounting is disabled.");
+        return false;
+    }
     dismissLinkedInAiChatbotIfOpen();
     if (getLinkedInVideo()) return true;
 
@@ -7813,6 +8327,8 @@ function stopLinkedInVideoPlayback() {
             vid.playbackRate = 1.0;
             vid.muted = false;
         }
+        sessionStorage.removeItem('fcukLinkedInSingleRunning');
+        sessionStorage.removeItem('fcukLinkedInTargetSpeed');
         chrome.storage.local.remove(['linkedinQueueRunning', 'linkedinTargetSpeed']).catch(() => {});
         chrome.runtime.sendMessage({ action: "reset_main_world_speed" }).catch(() => {});
         window.postMessage({ type: '__FCUK_LINKEDIN_SPEED__', speed: 1.0, active: false }, '*');
@@ -7820,6 +8336,10 @@ function stopLinkedInVideoPlayback() {
 }
 
 async function startLinkedInCourseCompletionProcess(options = {}) {
+    if (isLinkedInLearningPathPage() && !options.isWorkerTab) {
+        log("[LinkedIn] Detected Learning Path Master Page. Video playback process is disabled on Master page.");
+        return;
+    }
     const targetSpeed = options.speed || 16.0;
     let singleOnly = !!options.singleVideoOnly;
     const isWorkerTab = !!options.isWorkerTab;
@@ -7828,6 +8348,10 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
     currentLinkedInSpeed = targetSpeed;
 
     if (isWorkerTab) {
+        globalState.isWorkerTab = true;
+        if (options.courseTitle) {
+            globalState.workerCourse = { id: courseId, title: options.courseTitle };
+        }
         startTabKeepAliveHeartbeat();
         // Prevent worker scripts from creating new tabs via window.open
         try {
@@ -7844,10 +8368,8 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
     showOnScreenHUD(`LinkedIn: Initializing Video Completer (${targetSpeed}x)...`, "working");
 
     if (!singleOnly && !isWorkerTab) {
-        await chrome.storage.local.set({
-            linkedinQueueRunning: true,
-            linkedinTargetSpeed: targetSpeed
-        });
+        sessionStorage.setItem('fcukLinkedInSingleRunning', 'true');
+        sessionStorage.setItem('fcukLinkedInTargetSpeed', String(targetSpeed));
     }
 
     // Ensure video player is mounted (in case we landed on Course Overview page)
@@ -7906,6 +8428,12 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             updateStatus(`[${completed}/${total > 0 ? total : 1}] ${currentTitle}`);
             showOnScreenHUD(`⚡ [${completed + 1}/${total > 0 ? total : 1}] ${currentTitle.substring(0, 30)}...`, "working");
 
+            if (isWorkerTab) {
+                renderWorkerHudState(globalState.workerCourse || { title: currentTitle }, currentLinkedInSpeed, currentTitle, completed, total);
+            } else if (!isLinkedInLearningPathPage()) {
+                renderSingleCourseHudState(document.title.replace(/\| LinkedIn Learning.*$/i, '').trim(), currentLinkedInSpeed, currentTitle, completed, total, true);
+            }
+
             // Telemetry ping to background orchestrator
             if (isWorkerTab && courseId) {
                 chrome.runtime.sendMessage({
@@ -7923,6 +8451,7 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             if (total > 0 && toc.uncompletedVideos.length === 0 && completed >= total) {
                 log(`🎉 All ${total} videos in this course verified 100% COMPLETED!`, "success");
                 showOnScreenHUD(`🎉 Course Completed (100% - ${total}/${total})!`, "success");
+                sessionStorage.removeItem('fcukLinkedInSingleRunning');
                 courseCompletedVerified = true;
                 if (isWorkerTab && courseId) {
                     await chrome.runtime.sendMessage({
@@ -7969,6 +8498,12 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             const updatedToc = scanLinkedInTOC();
             updateProgress(updatedToc.completedCount, updatedToc.totalCount, "Advancing...");
 
+            if (isWorkerTab) {
+                renderWorkerHudState(globalState.workerCourse || { title: currentTitle }, currentLinkedInSpeed, "Advancing...", updatedToc.completedCount, updatedToc.totalCount);
+            } else if (!isLinkedInLearningPathPage()) {
+                renderSingleCourseHudState(document.title.replace(/\| LinkedIn Learning.*$/i, '').trim(), currentLinkedInSpeed, "Advancing...", updatedToc.completedCount, updatedToc.totalCount, true);
+            }
+
             if (isWorkerTab && courseId) {
                 chrome.runtime.sendMessage({
                     action: "path_worker_progress",
@@ -7983,6 +8518,7 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             if (updatedToc.totalCount > 0 && updatedToc.uncompletedVideos.length === 0 && updatedToc.completedCount >= updatedToc.totalCount) {
                 log(`🎉 Entire course is verified 100% completed (${updatedToc.completedCount}/${updatedToc.totalCount})!`, "success");
                 showOnScreenHUD("🎉 Entire Course Completed (100%)!", "success");
+                sessionStorage.removeItem('fcukLinkedInSingleRunning');
                 courseCompletedVerified = true;
                 if (isWorkerTab && courseId) {
                     await chrome.runtime.sendMessage({
@@ -8135,9 +8671,15 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             return;
         }
 
-        // 3. Check LinkedIn Learning Video Queue
+        // 3. Clean up stale global storage flags to prevent accidental auto-launch
         if (data.linkedinQueueRunning) {
-            log("[LinkedIn Auto-Resume] Resuming LinkedIn Learning video queue on new lesson...");
+            chrome.storage.local.remove(['linkedinQueueRunning']).catch(() => {});
+        }
+
+        // 4. Check if single course was actively running in THIS specific tab session
+        const isTabSessionRunning = sessionStorage.getItem('fcukLinkedInSingleRunning') === 'true';
+        if (isTabSessionRunning && !isLinkedInLearningPathPage()) {
+            log("[LinkedIn Auto-Resume] Resuming active course playback in current tab session...");
             globalState.isRunning = true;
             globalState.currentAction = "linkedin_video";
 
@@ -8146,20 +8688,23 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             }
             await new Promise(r => setTimeout(r, 600));
 
-            // Check if current page is quiz upon reload
             await skipLinkedInQuizIfPresent();
 
-            await startLinkedInCourseCompletionProcess({ 
-                speed: data.linkedinTargetSpeed || 16.0 
-            });
+            const targetSpeed = parseFloat(sessionStorage.getItem('fcukLinkedInTargetSpeed')) || 16.0;
+            await startLinkedInCourseCompletionProcess({ speed: targetSpeed, singleVideoOnly: false });
+            return;
         }
 
-        // 4. Check if this tab is an active LinkedIn Learning Path Worker tab (after page reload or error recovery)
+        // 5. Check if this tab is an active LinkedIn Learning Path Worker tab (after page reload or error recovery)
         try {
             const workerResp = await chrome.runtime.sendMessage({ action: "get_my_worker_course" });
             if (workerResp && workerResp.isWorker && workerResp.course) {
                 log(`[Worker Auto-Resume] Detected active worker assignment for course: "${workerResp.course.title}". Resuming execution...`);
                 globalState.isRunning = true;
+                globalState.isWorkerTab = true;
+                globalState.workerCourse = workerResp.course;
+                globalState.workerParentPathTitle = workerResp.pathTitle;
+                globalState.workerParentPathUrl = workerResp.pathUrl;
                 globalState.currentAction = "linkedin_video";
 
                 if (document.readyState !== 'complete') {
@@ -8173,7 +8718,8 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
                 await startLinkedInCourseCompletionProcess({
                     speed: workerResp.targetSpeed || 16.0,
                     isWorkerTab: true,
-                    courseId: workerResp.course.id
+                    courseId: workerResp.course.id,
+                    courseTitle: workerResp.course.title
                 });
                 return;
             }
@@ -8187,20 +8733,68 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
 chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local' && changes.linkedinPathState) {
         if (changes.linkedinPathState.newValue) {
-            renderFloatingHudState(changes.linkedinPathState.newValue);
+            if (isLinkedInLearningPathPage()) {
+                renderFloatingHudState(changes.linkedinPathState.newValue);
+                renderMasterPageBanner(changes.linkedinPathState.newValue);
+            }
         } else if (floatingHudEl) {
             floatingHudEl.style.display = 'none';
         }
     }
 });
 
-// Auto-initialize Floating HUD if a learning path is currently stored in storage
+// Auto-initialize Floating HUD and Master Banner on load
 (async () => {
     try {
         if (typeof isLinkedInLearningPlatform === 'function' && isLinkedInLearningPlatform()) {
-            const data = await chrome.storage.local.get(['linkedinPathState']);
-            if (data.linkedinPathState && (data.linkedinPathState.isRunning || data.linkedinPathState.totalCourses > 0)) {
-                renderFloatingHudState(data.linkedinPathState);
+            if (isLinkedInLearningPathPage()) {
+                createLinkedInFloatingHUD();
+                renderMasterPageBanner();
+                const data = await chrome.storage.local.get(['linkedinPathState']);
+                if (data.linkedinPathState && data.linkedinPathState.totalCourses > 0) {
+                    renderFloatingHudState(data.linkedinPathState);
+                    renderMasterPageBanner(data.linkedinPathState);
+                } else {
+                    const pathData = scanLinkedInLearningPath();
+                    const initialPathState = {
+                        isRunning: false,
+                        pathTitle: pathData.pathTitle,
+                        pathUrl: pathData.pathUrl,
+                        courses: pathData.courses,
+                        totalCourses: pathData.totalCourses,
+                        completedCourses: pathData.completedCourses,
+                        maxConcurrency: 3,
+                        targetSpeed: 16.0,
+                        activeWorkerCount: 0
+                    };
+                    renderFloatingHudState(initialPathState);
+                    renderMasterPageBanner(initialPathState);
+                }
+            } else {
+                const workerResp = await chrome.runtime.sendMessage({ action: "get_my_worker_course" });
+                if (workerResp && workerResp.isWorker && workerResp.course) {
+                    globalState.isWorkerTab = true;
+                    globalState.workerCourse = workerResp.course;
+                    globalState.workerParentPathTitle = workerResp.pathTitle;
+                    globalState.workerParentPathUrl = workerResp.pathUrl;
+                    createLinkedInFloatingHUD();
+                    renderWorkerHudState(workerResp.course, workerResp.targetSpeed || 16.0);
+                } else {
+                    // Normal standalone course: render HUD with course status if TOC available
+                    const isTabSessionRunning = sessionStorage.getItem('fcukLinkedInSingleRunning') === 'true';
+                    if (!isTabSessionRunning) {
+                        if (document.readyState !== 'complete') {
+                            await new Promise(r => window.addEventListener('load', r, { once: true }));
+                        }
+                        await new Promise(r => setTimeout(r, 600));
+                        const toc = scanLinkedInTOC();
+                        if (toc.totalCount > 0) {
+                            createLinkedInFloatingHUD();
+                            const courseTitle = document.title.replace(/\| LinkedIn Learning.*$/i, '').trim();
+                            renderSingleCourseHudState(courseTitle, 16.0, null, toc.completedCount, toc.totalCount, false);
+                        }
+                    }
+                }
             }
         }
     } catch(e) {}

@@ -792,17 +792,22 @@ document.getElementById('readBtn').addEventListener('click', async () => {
             if (aiSettingsSection) aiSettingsSection.style.display = 'none';
             if (pathControls) pathControls.style.display = 'block';
             if (courseControls) courseControls.style.display = 'none';
-            if (platformTag) platformTag.innerText = "LinkedIn (Path)";
+            if (platformTag) platformTag.innerText = "LinkedIn (Master Path)";
 
             const titleEl = document.getElementById('linkedinContextTitle');
             const tagEl = document.getElementById('linkedinContextTag');
             const subEl = document.getElementById('linkedinContextSub');
+            const masterRelaxBanner = document.getElementById('masterRelaxBanner');
+            const workerTabBanner = document.getElementById('workerTabBanner');
+
             if (titleEl) titleEl.innerText = state.pathTitle || "Learning Path";
             if (tagEl) {
-                tagEl.innerText = "Learning Path";
-                tagEl.className = "context-tag";
+                tagEl.innerText = "Master Orchestrator";
+                tagEl.className = "context-tag master";
             }
-            if (subEl) subEl.innerText = `${state.completedCourses}/${state.totalCourses} courses complete`;
+            if (subEl) subEl.innerText = `${state.completedCourses}/${state.totalCourses} courses complete • Workers in background`;
+            if (masterRelaxBanner) masterRelaxBanner.style.display = 'flex';
+            if (workerTabBanner) workerTabBanner.style.display = 'none';
 
             // Highlight active concurrency pill
             if (state.maxConcurrency) {
@@ -863,7 +868,7 @@ document.getElementById('readBtn').addEventListener('click', async () => {
             });
         });
 
-        // Query active tab context (Learning Path vs Single Course) with auto-retry
+        // Query active tab context (Learning Path vs Single Course vs Worker Tab) with auto-retry
         const queryTabContext = (retryCount = 0) => {
             sendTabMessageWithAutoInject(tab.id, { action: "get_linkedin_context" }, (ctx) => {
                 if (!ctx) return;
@@ -873,16 +878,21 @@ document.getElementById('readBtn').addEventListener('click', async () => {
                 const tagEl = document.getElementById('linkedinContextTag');
                 const subEl = document.getElementById('linkedinContextSub');
                 const switchBtn = document.getElementById('linkedinSwitchPathBtn');
+                const masterRelaxBanner = document.getElementById('masterRelaxBanner');
+                const workerTabBanner = document.getElementById('workerTabBanner');
+                const workerTabParentInfo = document.getElementById('workerTabParentInfo');
 
                 if (ctx.isPathPage) {
-                    // User is viewing a Learning Path!
+                    // User is viewing a Learning Path Master Page!
                     if (pathControls) pathControls.style.display = 'block';
                     if (courseControls) courseControls.style.display = 'none';
                     if (titleEl) titleEl.innerText = ctx.pathTitle || "Learning Path";
                     if (tagEl) {
-                        tagEl.innerText = "Learning Path";
-                        tagEl.className = "context-tag";
+                        tagEl.innerText = "Master Orchestrator";
+                        tagEl.className = "context-tag master";
                     }
+                    if (masterRelaxBanner) masterRelaxBanner.style.display = 'flex';
+                    if (workerTabBanner) workerTabBanner.style.display = 'none';
 
                     // If React DOM is still mounting courses, retry after 500ms
                     if ((!ctx.courses || ctx.courses.length === 0) && retryCount < 3) {
@@ -897,15 +907,33 @@ document.getElementById('readBtn').addEventListener('click', async () => {
 
                     // Initial render of detected courses list in tray
                     renderPathWorkerState({
-                        isRunning: false,
+                        isRunning: activePathRunning,
                         courses: ctx.courses,
                         totalCourses: ctx.totalCourses,
                         completedCourses: ctx.completedCourses,
                         maxConcurrency: 3,
                         activeWorkerCount: 0
                     });
+                } else if (ctx.isWorkerTab) {
+                    // Active Background Worker Tab
+                    if (pathControls) pathControls.style.display = 'none';
+                    if (courseControls) courseControls.style.display = 'block';
+                    if (titleEl) titleEl.innerText = ctx.workerCourseTitle || ctx.courseTitle || "Worker Tab";
+                    if (tagEl) {
+                        tagEl.innerText = "Worker Tab";
+                        tagEl.className = "context-tag worker";
+                    }
+                    if (subEl) subEl.innerText = `👷 Worker: ${ctx.completedVideos || 0}/${ctx.totalVideos || 0} videos watched`;
+                    if (masterRelaxBanner) masterRelaxBanner.style.display = 'none';
+                    if (workerTabBanner) {
+                        workerTabBanner.style.display = 'flex';
+                        if (workerTabParentInfo) {
+                            workerTabParentInfo.innerText = `Completing course for "${ctx.workerParentPathTitle || 'Learning Path'}". Progress reports live to Master tab.`;
+                        }
+                    }
+                    if (switchBtn) switchBtn.style.display = 'none';
                 } else {
-                    // User is viewing a Single Course
+                    // User is viewing a Standalone Single Course
                     if (pathControls) pathControls.style.display = 'none';
                     if (courseControls) courseControls.style.display = 'block';
                     if (titleEl) titleEl.innerText = ctx.courseTitle || "Single Course";
@@ -914,6 +942,8 @@ document.getElementById('readBtn').addEventListener('click', async () => {
                         tagEl.className = "context-tag single";
                     }
                     if (subEl) subEl.innerText = `${ctx.completedVideos || 0}/${ctx.totalVideos || 0} videos watched`;
+                    if (masterRelaxBanner) masterRelaxBanner.style.display = 'none';
+                    if (workerTabBanner) workerTabBanner.style.display = 'none';
 
                     if (ctx.hasParentPath && ctx.parentPathUrl) {
                         if (switchBtn) {

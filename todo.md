@@ -70,6 +70,20 @@ The extension operates across two major educational platforms:
   - Added self-invoking auto-resume in `content.js` to pick up worker execution on page reload without getting stranded.
 - [x] **Post-Course Dialog & Survey Dismissal**:
   - Added `dismissLinkedInModalsIfPresent` targeting rating modals, feedback forms, and course completion dialogs.
+- [x] **Master Page Live Progress Dashboard ("Relax & Watch Progress Live")**:
+  - Implemented `#fcuk-master-page-banner` injected at the top of syllabus/hero sections on Learning Path and Career Hub pages.
+  - Prominently informs the user: *"🛋️ Relax & Watch Progress Live — Workers are completing courses in background tabs. Keep this Master tab open."*
+  - Shows real-time progress metrics (Completed / Total, Active Workers, Speed), concurrency buttons, and live course status badges (`✓ 100% Complete`, `[Worker Tab #1] 65%`, `Queued`, `Incomplete`).
+  - Synced live with Floating HUD and persistent storage across background worker tabs.
+- [x] **Auto-Start Prevention & Learning Path Navigation Bug Fix**:
+  - Eliminated automatic course opening when visiting a Learning Path page:
+    - Added strict negative keyword filters in `scanLinkedInLearningPath` button expanders to prevent clicking action buttons ("Start course", "Resume course", "Start learning path").
+    - Added guards in `ensureLinkedInVideoPlayerMounted` and `startLinkedInCourseCompletionProcess` to completely disable video mounting/playback on Master Pages.
+    - Deprecated persistent `linkedinQueueRunning` in global storage, restricting course auto-resume strictly to tab-scoped `sessionStorage` and background worker assignments (`get_my_worker_course`).
+- [x] **Page-Specific Context Across Extension Popup & Floating HUD**:
+  - **Master Page**: Shows Master Orchestrator controls, Relax banner, full curriculum tray, and concurrency controls.
+  - **Worker Tab**: Shows `[Worker Tab]` tag, active worker status syncing to Master tab, lesson progress (`[5/14]`), and single-worker stop option.
+  - **Standalone Course**: Shows Single Course Player controls, course title, video count, start/stop buttons, and progress bar.
 - [x] **Rigorous Course & Lesson Completion Verification**:
   - Implemented `isPathCourseCardCompleted(card)` in `content.js` to prevent courses with partial progress ("Completed 2 of 10", "20% completed") or "Start course" from falsely registering as 100% complete.
   - Fixed item type misclassification: stopped treating 3-segment course URLs (`/learning/course-name/lesson-slug`) as single videos so workers no longer abandon courses after 1 video.

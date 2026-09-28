@@ -745,9 +745,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const course = pathOrchestrator.courses.find(c => c.id === courseId);
         if (course) {
-            course.status = 'completed';
-            course.percent = 100;
-            course.currentItem = "Completed ✓";
+            // Strict verification check: if completion telemetry indicates uncompleted videos remain, do not mark 100% completed
+            if (request.totalVideos > 0 && request.completedVideos < request.totalVideos) {
+                console.warn(`[Background Orchestrator] Warning: Course ${courseId} reported completed but verified count is only ${request.completedVideos}/${request.totalVideos}. Marking failed.`);
+                course.status = 'failed';
+                course.percent = Math.round((request.completedVideos / request.totalVideos) * 100);
+                course.currentItem = `Incomplete (${request.completedVideos}/${request.totalVideos})`;
+            } else {
+                course.status = 'completed';
+                course.percent = 100;
+                course.currentItem = "Completed ✓";
+            }
             course.tabId = null;
         }
 
@@ -755,7 +763,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             pathOrchestrator.activeWorkers.delete(workerTabId);
             initializedWorkerTabIds.delete(workerTabId);
             untrackWorkerTabId(workerTabId);
-            // Automatically close completed course tab!
+            // Automatically close finished course tab!
             chrome.tabs.remove(workerTabId).catch(() => {});
         }
 
@@ -763,6 +771,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         broadcastPathProgress();
 
         // Dispatch next course in the queue!
+        dispatchNextPathWorkers();
+
+        sendResponse({ status: "acknowledged" });
+        return true;
+    }
+
+    if (request.action === "path_worker_course_failed") {
+        const courseId = request.courseId;
+        const workerTabId = (sender && sender.tab ? sender.tab.id : null) || request.tabId;
+
+        const course = pathOrchestrator.courses.find(c => c.id === courseId);
+        if (course) {
+            course.status = 'failed';
+            course.currentItem = request.error || "Incomplete / Error";
+            course.tabId = null;
+        }
+
+        if (workerTabId) {
+            pathOrchestrator.activeWorkers.delete(workerTabId);
+            initializedWorkerTabIds.delete(workerTabId);
+            untrackWorkerTabId(workerTabId);
+            chrome.tabs.remove(workerTabId).catch(() => {});
+        }
+
+        savePathState();
+        broadcastPathProgress();
+
+        // Continue running remaining queued courses
         dispatchNextPathWorkers();
 
         sendResponse({ status: "acknowledged" });

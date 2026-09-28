@@ -70,6 +70,13 @@ The extension operates across two major educational platforms:
   - Added self-invoking auto-resume in `content.js` to pick up worker execution on page reload without getting stranded.
 - [x] **Post-Course Dialog & Survey Dismissal**:
   - Added `dismissLinkedInModalsIfPresent` targeting rating modals, feedback forms, and course completion dialogs.
+- [x] **Rigorous Course & Lesson Completion Verification**:
+  - Implemented `isPathCourseCardCompleted(card)` in `content.js` to prevent courses with partial progress ("Completed 2 of 10", "20% completed") or "Start course" from falsely registering as 100% complete.
+  - Fixed item type misclassification: stopped treating 3-segment course URLs (`/learning/course-name/lesson-slug`) as single videos so workers no longer abandon courses after 1 video.
+  - Implemented `isTocItemCompleted(el, link)` to eliminate substring false positives (e.g. `'incomplete'.includes('complete')`) and placeholder CSS class matches.
+  - Added TOC verification when `advanceToNextLinkedInVideo` fails: instead of exiting and falsely marking complete, automatically jumps directly to remaining uncompleted lessons.
+  - Secured `finally` block in `startLinkedInCourseCompletionProcess`: only reports `path_worker_course_completed` if completion was explicitly verified; otherwise reports `path_worker_course_failed`.
+  - Added `path_worker_course_failed` handler in `background.js` and `.badge-error` / `.hud-badge-error` UI badges.
 
 ### Coursera Core Features (Previous Milestones)
 - [x] Multiple AI provider integrations (OpenRouter, Groq, Gemini, Localhost).

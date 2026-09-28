@@ -479,6 +479,14 @@
   - Bypassed Chromium Autoplay policy by forcing audio muting and spoofing `document.visibilityState` / focus events in the MAIN execution world.
 - 📝 **Created Root `todo.md`**:
   - Created persistent project task tracker and architecture overview at root level for seamless continuity in future agent (`.agents`) sessions.
+- 🎯 **Airtight Course & Lesson Completion Verification**:
+  - **Learning Path Card Detection (`isPathCourseCardCompleted`)**: Eliminated false positives caused by generic `.includes('completed')` matching cards with partial progress ("Completed 2 of 10", "20% completed") or "Start course" buttons. Added ratio parsing, progress bar inspections, and negative indicators.
+  - **Item Type Classification Fix**: Stopped treating 3-segment course URLs (`/learning/course-name/lesson-slug`) as single videos so worker tabs do not abandon courses after playing only the first video.
+  - **Dynamic TOC Override**: If `singleOnly` was set on launch, but `scanLinkedInTOC()` finds a multi-video course TOC (`totalCount > 1`), automatically overrides to `singleOnly = false` to guarantee 100% full course completion.
+  - **TOC Item Precision (`isTocItemCompleted`)**: Fixed bug where substring `'incomplete'.includes('complete')` or placeholder classes marked incomplete lessons as completed.
+  - **Advancement Jump & Failsafe**: When `advanceToNextLinkedInVideo()` fails, the player rescans the TOC and jumps directly to remaining uncompleted lessons rather than prematurely claiming completion.
+  - **Worker Failure Reporting**: Secured the `finally` block in `startLinkedInCourseCompletionProcess` to only send `path_worker_course_completed` if completion was explicitly verified; otherwise sends `path_worker_course_failed` to accurately reflect incomplete/errored state.
+  - **Orchestrator Resilience**: Added `path_worker_course_failed` handler in `background.js` and `.badge-error` / `.hud-badge-error` UI badges.
 
 ### What's Planned Next / Future Considerations:
 - Test parallel worker execution across multiple live courses in complex LinkedIn Learning Paths.

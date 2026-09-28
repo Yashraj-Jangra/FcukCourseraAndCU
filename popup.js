@@ -507,8 +507,8 @@ function renderPathWorkerState(state) {
                 badgeClass = 'badge-running';
                 badgeText = c.percent > 0 ? `${c.percent}%` : 'Running...';
             } else if (c.status === 'failed') {
-                badgeClass = 'badge-queued';
-                badgeText = 'Failed';
+                badgeClass = 'badge-error';
+                badgeText = 'Incomplete';
             }
 
             badgeSpan.className = `worker-badge ${badgeClass}`;

@@ -5421,6 +5421,116 @@ function detectLinkedInParentPath() {
     return { hasParentPath: false, pathUrl: null, pathTitle: null };
 }
 
+// Rigorous helper to determine if a course card on a Learning Path overview page is truly 100% completed
+function isPathCourseCardCompleted(card) {
+    if (!card) return false;
+
+    const cardText = (card.innerText || '').toLowerCase();
+    const cardAria = ((card.getAttribute('aria-label') || '') + ' ' + (card.querySelector('a')?.getAttribute('aria-label') || '')).toLowerCase();
+
+    // 1. Explicit negative indicators: If text or aria says incomplete, not started, or start course
+    if (/\b(?:not\s+started|not\s+completed|incomplete|uncompleted|start\s+course|start\s+learning)\b/i.test(cardText) ||
+        /\b(?:not\s+started|not\s+completed|incomplete|uncompleted)\b/i.test(cardAria)) {
+        return false;
+    }
+
+    // 2. Partial progress ratio checks: e.g. "Completed 2 of 10", "1 of 5 completed", "20% completed"
+    const ratioMatch = cardText.match(/\bcompleted\s+(\d+)\s*(?:of|\/)\s*(\d+)\b/i) ||
+                       cardText.match(/\b(\d+)\s*(?:of|\/)\s*(\d+)\s*(?:items?\s*)?completed\b/i);
+    if (ratioMatch) {
+        const done = parseInt(ratioMatch[1], 10);
+        const total = parseInt(ratioMatch[2], 10);
+        if (total > 0 && done < total) {
+            return false;
+        }
+        if (total > 0 && done >= total) {
+            return true;
+        }
+    }
+
+    const percentMatch = cardText.match(/\b(\d+)\s*%\s*(?:completed|done)\b/i) ||
+                         cardText.match(/\b(?:completed|progress):\s*(\d+)\s*%/i);
+    if (percentMatch) {
+        const pct = parseInt(percentMatch[1], 10);
+        if (pct < 100) {
+            return false;
+        }
+        if (pct >= 100) {
+            return true;
+        }
+    }
+
+    // 3. Progress bar indicator
+    const pbar = card.querySelector('[role="progressbar"], progress, .progress-bar, [data-progress-value]');
+    if (pbar) {
+        const val = pbar.getAttribute('aria-valuenow') || pbar.getAttribute('data-progress-value') || pbar.value;
+        const max = pbar.getAttribute('aria-valuemax') || 100;
+        if (val !== null && val !== undefined) {
+            const numVal = parseFloat(val);
+            const numMax = parseFloat(max) || 100;
+            if (numVal < numMax) return false;
+            if (numVal >= numMax && numVal > 0) return true;
+        }
+    }
+
+    // 4. In-progress badge check
+    const inProgressBadge = card.querySelector('.content-entity-card__status--in-progress, [class*="in-progress" i]');
+    if (inProgressBadge && inProgressBadge.offsetParent !== null) {
+        return false;
+    }
+
+    // 5. Positive check: explicit BEM modifier on card element
+    if (card.classList.contains('learning-path-item--completed') ||
+        card.classList.contains('content-entity-card--completed') ||
+        card.classList.contains('is-complete') ||
+        card.classList.contains('is-completed')) {
+        return true;
+    }
+
+    // 6. Positive check: explicit completion status badge
+    const badges = Array.from(card.querySelectorAll(
+        '.content-entity-card__status, [class*="status-badge"], [class*="completion-status"], ' +
+        '.learning-path-item__status, [data-test-item-status], .entity-status'
+    ));
+    for (const b of badges) {
+        const txt = (b.innerText || '').trim().toLowerCase();
+        if (txt === 'completed' || txt === 'complete') {
+            return true;
+        }
+    }
+
+    // 7. Positive check: visible check-circle icon
+    const checkIcon = card.querySelector(
+        'svg[data-test-icon*="check-circle" i], ' +
+        'svg[data-test-icon="check-small"], ' +
+        'svg[data-test-icon="check"], ' +
+        '[data-test-icon*="check-circle"]'
+    );
+    if (checkIcon) {
+        const btn = checkIcon.closest('button, [role="button"]');
+        if (btn) {
+            const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').toLowerCase();
+            if (btnText.includes('mark as') || btnText.includes('more') || btnText.includes('action')) {
+                return false;
+            }
+        }
+        const aria = (checkIcon.getAttribute('aria-label') || checkIcon.parentElement?.getAttribute('aria-label') || '').toLowerCase();
+        const parentText = (checkIcon.parentElement?.innerText || '').trim().toLowerCase();
+        if (aria.includes('completed') || parentText === 'completed' || checkIcon.getAttribute('data-test-icon')?.includes('circle')) {
+            try {
+                const s = window.getComputedStyle(checkIcon);
+                if (s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0') {
+                    return true;
+                }
+            } catch(e) {
+                if (checkIcon.offsetParent !== null) return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 function scanLinkedInLearningPath() {
     const titleCandidates = [
         document.querySelector('h1')?.innerText,
@@ -5579,18 +5689,17 @@ function scanLinkedInLearningPath() {
             const cardAria = (card.getAttribute('aria-label') || '').toLowerCase();
 
             // Detect item type: 'course' vs standalone 'video'
+            // Default to 'course' because 99% of path items are full courses, even if link points to /learning/course-name/lesson-slug
             let itemType = 'course';
             const typeBadge = card.querySelector(
                 '.content-entity-card__type, [class*="entity-type" i], [class*="content-type" i], [class*="badge" i]'
             );
             const badgeText = (typeBadge?.innerText || '').trim().toLowerCase();
 
-            if (badgeText === 'video' || cardText.includes('from the course:') || segments.length >= 3) {
+            if (badgeText === 'video' && cardText.includes('from the course:')) {
                 itemType = 'video';
-            } else if (badgeText === 'course') {
-                itemType = 'course';
             } else {
-                itemType = segments.length >= 3 ? 'video' : 'course';
+                itemType = 'course';
             }
 
             // Extract item title
@@ -5625,23 +5734,8 @@ function scanLinkedInLearningPath() {
                 duration = durMatch[0];
             }
 
-            // Completion check
-            let isCompleted = false;
-            const checkIcon = card.querySelector(
-                'svg[data-test-icon*="check" i], ' +
-                'svg[type="check"], ' +
-                '[data-test-icon="check-small"], ' +
-                '[class*="completed" i], ' +
-                '[class*="is-complete" i]'
-            );
-
-            if (checkIcon || 
-                card.classList.contains('is-complete') || 
-                card.classList.contains('completed') || 
-                cardText.includes('completed') || 
-                cardAria.includes('completed')) {
-                isCompleted = true;
-            }
+            // Rigorous verified completion check
+            const isCompleted = isPathCourseCardCompleted(card);
 
             // Deduplicate by clean itemSlug so multiple links in one card resolve into a single item
             if (!itemMap.has(dedupeKey)) {
@@ -5661,8 +5755,9 @@ function scanLinkedInLearningPath() {
                 if (title && title.length > existing.title.length && !title.includes('http')) {
                     existing.title = title;
                 }
-                if (isCompleted) {
-                    existing.isCompleted = true;
+                // Only mark completed if this link is also verified complete
+                if (existing.isCompleted && !isCompleted) {
+                    existing.isCompleted = false; // A single incomplete signal overrides false positives
                 }
             }
         } catch(e) {}
@@ -5957,6 +6052,11 @@ function createLinkedInFloatingHUD() {
             .hud-badge-queued {
                 background: rgba(255, 255, 255, 0.06);
                 color: #8e929e;
+            }
+            .hud-badge-error {
+                background: rgba(239, 68, 68, 0.2);
+                color: #f87171;
+                border: 1px solid rgba(239, 68, 68, 0.35);
             }
             .hud-controls-row {
                 display: flex;
@@ -6456,6 +6556,9 @@ function renderFloatingHudState(state) {
             } else if (c.status === 'running') {
                 badgeClass = 'hud-badge-running';
                 badgeText = c.percent > 0 ? `${c.percent}%` : 'Running...';
+            } else if (c.status === 'failed') {
+                badgeClass = 'hud-badge-error';
+                badgeText = 'Incomplete';
             }
 
             badgeSpan.className = `hud-badge ${badgeClass}`;
@@ -6800,6 +6903,52 @@ function isLinkedInQuizPage() {
     return false;
 }
 
+// Strict helper to determine if a lesson in classroom TOC is truly completed
+function isTocItemCompleted(el, link) {
+    if (!el) return false;
+
+    // Negative check: If aria or text contains "not complete", "incomplete", etc., definitely NOT completed
+    const fullAria = ((el.getAttribute('aria-label') || '') + ' ' + (link?.getAttribute('aria-label') || '')).toLowerCase();
+    if (/\b(?:not\s+completed|not\s+complete|incomplete|uncompleted|not\s+watched|in\s+progress)\b/i.test(fullAria)) {
+        return false;
+    }
+
+    // 1. Check for exact BEM class modifier: 'classroom-toc-item--completed' or 'is-complete'
+    if (el.classList.contains('classroom-toc-item--completed') ||
+        el.classList.contains('classroom-toc-section__item--completed') ||
+        el.classList.contains('is-complete') ||
+        el.classList.contains('is-completed')) {
+        return true;
+    }
+
+    // 2. Strict aria-label check: must contain word "completed" or "watched"
+    if (/\b(?:completed|watched)\b/i.test(fullAria)) {
+        return true;
+    }
+
+    // 3. Visible check SVG: Must be a checkmark icon that is strictly rendered and visible
+    const checkSvg = el.querySelector(
+        'svg[data-test-icon="check-small"], ' +
+        'svg[data-test-icon="check"], ' +
+        'svg[data-test-icon="check-circle-small"], ' +
+        'svg[data-test-icon="check-circle"], ' +
+        'svg[aria-label*="completed" i], ' +
+        'svg[aria-label*="watched" i]'
+    );
+    if (checkSvg) {
+        try {
+            const style = window.getComputedStyle(checkSvg);
+            if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+                return true;
+            }
+        } catch(e) {
+            if (checkSvg.offsetParent !== null) return true;
+        }
+    }
+
+    return false;
+}
+
 function isCurrentLinkedInLessonCompleted() {
     try {
         // 1. Check active item in TOC for completed checkmark
@@ -6813,22 +6962,8 @@ function isCurrentLinkedInLessonCompleted() {
         );
 
         if (activeTocItem) {
-            const check = activeTocItem.querySelector(
-                'svg[data-test-icon*="check" i], ' +
-                'svg[type="check"], ' +
-                '[data-test-icon="check-small"], ' +
-                '[data-test-icon="check"], ' +
-                'svg[aria-label*="completed" i], ' +
-                'svg[aria-label*="watched" i], ' +
-                '[class*="completed" i], ' +
-                '[class*="is-complete" i], ' +
-                '[class*="checked" i]'
-            );
-            const aria = ((activeTocItem.getAttribute('aria-label') || '') + ' ' + (activeTocItem.querySelector('a')?.getAttribute('aria-label') || '')).toLowerCase();
-            const isCompletedClass = activeTocItem.classList.contains('classroom-toc-item--completed') || 
-                                     activeTocItem.className.includes('completed') ||
-                                     activeTocItem.className.includes('is-complete');
-            if (check || isCompletedClass || aria.includes('completed') || aria.includes('watched')) {
+            const link = activeTocItem.tagName.toLowerCase() === 'a' ? activeTocItem : activeTocItem.querySelector('a');
+            if (isTocItemCompleted(activeTocItem, link)) {
                 return true;
             }
         }
@@ -7258,27 +7393,7 @@ function scanLinkedInTOC() {
         const link = el.tagName.toLowerCase() === 'a' ? el : el.querySelector('a');
         const href = link ? link.getAttribute('href') : null;
 
-        const hasCheckSvg = !!el.querySelector(
-            'svg[data-test-icon*="check" i], ' +
-            'svg[type="check"], ' +
-            '[data-test-icon="check-small"], ' +
-            '[data-test-icon="check"], ' +
-            'svg[aria-label*="completed" i], ' +
-            'svg[aria-label*="watched" i], ' +
-            'svg[aria-label*="Complete" i], ' +
-            '[class*="completed" i], ' +
-            '[class*="is-complete" i], ' +
-            '[class*="checked" i]'
-        );
-        const ariaLabel = ((el.getAttribute('aria-label') || '') + ' ' + (link?.getAttribute('aria-label') || '')).toLowerCase();
-        const isAriaCompleted = ariaLabel.includes('completed') || 
-                                ariaLabel.includes('watched') || 
-                                ariaLabel.includes('complete');
-        const hasCompletedClass = el.classList.contains('classroom-toc-item--completed') || 
-                                  el.className.includes('completed') || 
-                                  el.className.includes('is-complete');
-        
-        const isCompleted = hasCheckSvg || isAriaCompleted || hasCompletedClass;
+        const isCompleted = isTocItemCompleted(el, link);
 
         const isQuiz = (
             /quiz|assessment|practice\s+exam|exam\s+prep|knowledge\s+check|check\s+your\s+understanding/i.test(cleanTitle) ||
@@ -7706,9 +7821,10 @@ function stopLinkedInVideoPlayback() {
 
 async function startLinkedInCourseCompletionProcess(options = {}) {
     const targetSpeed = options.speed || 16.0;
-    const singleOnly = !!options.singleVideoOnly;
+    let singleOnly = !!options.singleVideoOnly;
     const isWorkerTab = !!options.isWorkerTab;
     const courseId = options.courseId || null;
+    let courseCompletedVerified = false;
     currentLinkedInSpeed = targetSpeed;
 
     if (isWorkerTab) {
@@ -7767,14 +7883,28 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
                 continue;
             }
 
-            const toc = scanLinkedInTOC();
-            const total = toc.totalCount > 0 ? toc.totalCount : 1;
+            // Expand all chapters to ensure TOC is fully loaded in DOM
+            expandAllLinkedInChapters();
+            let toc = scanLinkedInTOC();
+            if (toc.totalCount === 0) {
+                await new Promise(r => setTimeout(r, 1200));
+                expandAllLinkedInChapters();
+                toc = scanLinkedInTOC();
+            }
+
+            const total = toc.totalCount;
             const completed = toc.completedCount;
             const currentTitle = toc.activeItem ? toc.activeItem.title : (document.title || "Video Lesson");
 
-            updateProgress(completed, total, currentTitle);
-            updateStatus(`[${completed}/${total}] ${currentTitle}`);
-            showOnScreenHUD(`⚡ [${completed + 1}/${total}] ${currentTitle.substring(0, 30)}...`, "working");
+            // If singleOnly was initially set, but this page actually contains a multi-video course TOC:
+            if (singleOnly && total > 1) {
+                log(`[LinkedIn] ℹ️ Course TOC contains ${total} video lessons. Running full course completion...`, "info");
+                singleOnly = false;
+            }
+
+            updateProgress(completed, total > 0 ? total : 1, currentTitle);
+            updateStatus(`[${completed}/${total > 0 ? total : 1}] ${currentTitle}`);
+            showOnScreenHUD(`⚡ [${completed + 1}/${total > 0 ? total : 1}] ${currentTitle.substring(0, 30)}...`, "working");
 
             // Telemetry ping to background orchestrator
             if (isWorkerTab && courseId) {
@@ -7788,13 +7918,19 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
                 }).catch(() => {});
             }
 
-            if (toc.uncompletedVideos.length === 0 && loopSafety > 1) {
-                log("🎉 All videos in this LinkedIn Learning course are completed (100%)!");
-                showOnScreenHUD("🎉 Entire Course Completed 100%!", "success");
+            // RIGOROUS VERIFIED COMPLETION CHECK:
+            // Must have at least 1 video, ALL uncompleted videos array must be empty, AND completed count must reach or exceed total!
+            if (total > 0 && toc.uncompletedVideos.length === 0 && completed >= total) {
+                log(`🎉 All ${total} videos in this course verified 100% COMPLETED!`, "success");
+                showOnScreenHUD(`🎉 Course Completed (100% - ${total}/${total})!`, "success");
+                courseCompletedVerified = true;
                 if (isWorkerTab && courseId) {
                     await chrome.runtime.sendMessage({
                         action: "path_worker_course_completed",
-                        courseId: courseId
+                        courseId: courseId,
+                        verified: true,
+                        completedVideos: completed,
+                        totalVideos: total
                     }).catch(() => {});
                     return;
                 }
@@ -7810,12 +7946,16 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             }
 
             if (singleOnly) {
-                log(`[LinkedIn] Single video completion finished.`);
+                log(`[LinkedIn] Single standalone video completion finished.`);
                 showOnScreenHUD("🎉 Video Completed!", "success");
+                courseCompletedVerified = true;
                 if (isWorkerTab && courseId) {
                     await chrome.runtime.sendMessage({
                         action: "path_worker_course_completed",
-                        courseId: courseId
+                        courseId: courseId,
+                        verified: true,
+                        completedVideos: 1,
+                        totalVideos: 1
                     }).catch(() => {});
                     return;
                 }
@@ -7840,13 +7980,17 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
                 }).catch(() => {});
             }
 
-            if (updatedToc.uncompletedVideos.length === 0) {
-                log("🎉 Entire course is now 100% completed!");
+            if (updatedToc.totalCount > 0 && updatedToc.uncompletedVideos.length === 0 && updatedToc.completedCount >= updatedToc.totalCount) {
+                log(`🎉 Entire course is verified 100% completed (${updatedToc.completedCount}/${updatedToc.totalCount})!`, "success");
                 showOnScreenHUD("🎉 Entire Course Completed (100%)!", "success");
+                courseCompletedVerified = true;
                 if (isWorkerTab && courseId) {
                     await chrome.runtime.sendMessage({
                         action: "path_worker_course_completed",
-                        courseId: courseId
+                        courseId: courseId,
+                        verified: true,
+                        completedVideos: updatedToc.completedCount,
+                        totalVideos: updatedToc.totalCount
                     }).catch(() => {});
                     return;
                 }
@@ -7855,16 +7999,47 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
 
             const advanced = await advanceToNextLinkedInVideo();
             if (!advanced) {
-                log("[LinkedIn] No further video lessons found. Course completed!");
-                showOnScreenHUD("🎉 Course Completed!", "success");
-                if (isWorkerTab && courseId) {
-                    await chrome.runtime.sendMessage({
-                        action: "path_worker_course_completed",
-                        courseId: courseId
-                    }).catch(() => {});
-                    return;
+                log("[LinkedIn] Advance button unavailable. Verifying course completion status before exiting...", "warning");
+                await new Promise(r => setTimeout(r, 1500));
+                expandAllLinkedInChapters();
+                const verifyToc = scanLinkedInTOC();
+
+                // If uncompleted videos still remain, jump directly to next uncompleted lesson!
+                if (verifyToc.totalCount > 0 && verifyToc.uncompletedVideos.length > 0) {
+                    log(`[LinkedIn] ⚠️ Found ${verifyToc.uncompletedVideos.length} remaining uncompleted lessons. Jumping directly...`, "warning");
+                    const target = verifyToc.uncompletedVideos[0];
+                    if (target && target.linkElement) {
+                        clickNativeElement(target.linkElement);
+                        await new Promise(r => setTimeout(r, 2000));
+                        continue;
+                    } else if (target && target.href) {
+                        window.location.href = target.href;
+                        await new Promise(r => setTimeout(r, 2000));
+                        continue;
+                    }
                 }
-                break;
+
+                // If verified that all lessons completed:
+                if (verifyToc.totalCount > 0 && verifyToc.completedCount >= verifyToc.totalCount) {
+                    log(`🎉 Verified: All ${verifyToc.totalCount} lessons completed!`, "success");
+                    showOnScreenHUD("🎉 Course Completed!", "success");
+                    courseCompletedVerified = true;
+                    if (isWorkerTab && courseId) {
+                        await chrome.runtime.sendMessage({
+                            action: "path_worker_course_completed",
+                            courseId: courseId,
+                            verified: true,
+                            completedVideos: verifyToc.completedCount,
+                            totalVideos: verifyToc.totalCount
+                        }).catch(() => {});
+                        return;
+                    }
+                    break;
+                } else {
+                    log(`[LinkedIn] ⚠️ Could not advance, but course is incomplete (${verifyToc.completedCount}/${verifyToc.totalCount}). Retrying playback...`, "warning");
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
             }
 
             log("[LinkedIn] Loading next video lesson...");
@@ -7895,11 +8070,20 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
                 'linkedinTargetSpeed'
             ]).catch(() => {});
         } else if (courseId && !globalState.abortRequested) {
-            // Worker tab completed execution — ensure background orchestrator closes tab and advances queue
-            chrome.runtime.sendMessage({
-                action: "path_worker_course_completed",
-                courseId: courseId
-            }).catch(() => {});
+            if (courseCompletedVerified) {
+                chrome.runtime.sendMessage({
+                    action: "path_worker_course_completed",
+                    courseId: courseId,
+                    verified: true
+                }).catch(() => {});
+            } else {
+                log(`[LinkedIn Worker] Tab finished without verified 100% completion. Reporting incomplete to orchestrator...`, "warning");
+                chrome.runtime.sendMessage({
+                    action: "path_worker_course_failed",
+                    courseId: courseId,
+                    error: "Incomplete before verification"
+                }).catch(() => {});
+            }
         }
 
         stopLinkedInVideoPlayback();

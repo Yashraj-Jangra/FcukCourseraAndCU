@@ -5333,12 +5333,51 @@ function applyLinkedInSpeed(speed = 16.0) {
 function getLinkedInVideo() {
     return document.querySelector('video') || 
            document.querySelector('.video-player video') || 
+           document.querySelector('.classroom-player video') ||
            document.querySelector('.vjs-tech') ||
            document.querySelector('[data-video-id] video') ||
            document.querySelector('video.classroom-player__video');
 }
 
-async function waitForLinkedInVideo(timeoutMs = 12000) {
+function triggerLinkedInNativePlay(video) {
+    try {
+        if (video) {
+            video.muted = true;
+            video.defaultMuted = true;
+            video.volume = 0;
+        }
+
+        const playSelectors = [
+            'button.classroom-player__play-button',
+            'button[data-control-name="play"]',
+            'button.vjs-big-play-button',
+            'button.vjs-play-control',
+            'button[aria-label*="Play video" i]',
+            'button[aria-label="Play" i]',
+            'button[aria-label*="play" i]',
+            'button[data-control-name="overlay_play"]',
+            '.classroom-player__overlay',
+            '.video-player__overlay',
+            '.vjs-poster'
+        ];
+
+        for (const sel of playSelectors) {
+            const btn = document.querySelector(sel);
+            if (btn && btn.offsetParent !== null) {
+                clickNativeElement(btn);
+                return true;
+            }
+        }
+
+        if (video && video.paused) {
+            video.play().catch(() => {});
+            return true;
+        }
+    } catch(e) {}
+    return false;
+}
+
+async function waitForLinkedInVideo(timeoutMs = 6000) {
     const startTime = Date.now();
     while (Date.now() - startTime < timeoutMs) {
         if (globalState.abortRequested) return null;
@@ -5348,11 +5387,21 @@ async function waitForLinkedInVideo(timeoutMs = 12000) {
             return null;
         }
 
+        // If lesson is already marked complete, return immediately
+        if (isCurrentLinkedInLessonCompleted()) {
+            return getLinkedInVideo();
+        }
+
         const video = getLinkedInVideo();
-        if (video && (video.readyState >= 1 || video.duration > 0 || !isNaN(video.duration))) {
+        if (video) {
+            // Prime video immediately so HLS stream starts loading without waiting 12s
+            video.muted = true;
+            video.defaultMuted = true;
+            video.volume = 0;
+            triggerLinkedInNativePlay(video);
             return video;
         }
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, 150));
     }
     return getLinkedInVideo();
 }
@@ -5454,41 +5503,67 @@ function isCurrentLinkedInLessonCompleted() {
 }
 
 async function refreshLinkedInVideo(video) {
-    log("[LinkedIn] 🔄 Video stuck/buffering! Refreshing video stream...", "warning");
-    showOnScreenHUD("🔄 Video stuck — Refreshing video...", "warning");
+    if (!video) return;
 
-    // 1. Look for and click Retry / Play / Reload buttons in the player
-    const playerControlBtns = [
+    // If lesson already completed while buffering, advance
+    if (isCurrentLinkedInLessonCompleted()) return;
+
+    log("[LinkedIn] 🔄 Video stuck/buffering! Recovering video stream...", "warning");
+    showOnScreenHUD("🔄 Video stuck — Recovering stream...", "warning");
+
+    // 1. Ensure muted state to satisfy browser Autoplay policies
+    try {
+        video.muted = true;
+        video.defaultMuted = true;
+        video.volume = 0;
+    } catch(e) {}
+
+    // 2. Look for and click Retry / Play / Resume controls in player DOM
+    const recoverySelectors = [
         'button[aria-label*="retry" i]',
         'button[aria-label*="reload" i]',
         '.vjs-error-display button',
         'button.classroom-player__play-button',
         'button[data-control-name="play"]',
-        'button[aria-label*="play" i]'
+        'button.vjs-big-play-button',
+        'button.vjs-play-control',
+        'button[aria-label*="play" i]',
+        '.classroom-player__overlay',
+        '.video-player__overlay'
     ];
-    for (const sel of playerControlBtns) {
+    for (const sel of recoverySelectors) {
         const btn = document.querySelector(sel);
         if (btn && btn.offsetParent !== null) {
             log(`[LinkedIn] Triggering player recovery control: ${sel}`);
             clickNativeElement(btn);
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise(r => setTimeout(r, 300));
             break;
         }
     }
 
-    // 2. Refresh the underlying HTMLMediaElement
+    // 3. Safe non-destructive MSE buffer nudge (NEVER call video.load() on MediaSource HLS streams!)
     try {
-        const savedTime = video.currentTime || 0;
-        video.pause();
-        video.load(); // Forces HTML5 media element to reconnect and reload media resource
-        video.currentTime = Math.max(0, savedTime);
-        video.muted = true;
-        video.defaultMuted = true;
-        video.volume = 0;
-        video.playbackRate = currentLinkedInSpeed || 16.0;
-        await video.play().catch(() => {});
+        const curr = video.currentTime || 0;
+        const dur = video.duration || 0;
+        
+        // Gentle seek nudge forces the MSE decoder pipeline to re-synchronize
+        if (dur > 2 && curr > 0.5) {
+            video.currentTime = Math.max(0, curr - 0.25);
+        } else if (dur > 2) {
+            video.currentTime = curr + 0.25;
+        }
+
+        // Re-enforce playback speed
+        applyLinkedInSpeed(currentLinkedInSpeed || 16.0);
+
+        // Resume playback
+        if (video.paused) {
+            await video.play().catch(() => {
+                triggerLinkedInNativePlay(video);
+            });
+        }
     } catch(e) {
-        console.log("Error during video.load():", e);
+        console.warn("[LinkedIn] Video stream recovery nudge notice:", e);
     }
 }
 
@@ -5688,7 +5763,7 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
         return true;
     }
 
-    const video = await waitForLinkedInVideo(12000);
+    const video = await waitForLinkedInVideo(6000);
     if (!video) {
         if (await skipLinkedInQuizIfPresent()) {
             return true;
@@ -5696,16 +5771,69 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
         throw new Error("Could not find active video player on page.");
     }
 
-    if (isNaN(video.duration) || video.duration === 0) {
-        log("[LinkedIn] Waiting for video stream metadata...");
+    // 2. Prime video immediately to satisfy browser autoplay policy & start HLS chunk download
+    try {
+        video.muted = true;
+        video.defaultMuted = true;
+        video.volume = 0;
+        triggerLinkedInNativePlay(video);
+    } catch(e) {}
+
+    // 3. Wait for video stream metadata / readiness with proactive kickstart & failsafe
+    const isReady = !isNaN(video.duration) && video.duration > 0 && video.readyState >= 1;
+    if (!isReady) {
+        log("[LinkedIn] Initializing video stream & waiting for metadata...");
+        showOnScreenHUD("⏳ Initializing video stream...", "working");
+
         await new Promise(resolve => {
-            const onLoaded = () => {
-                video.removeEventListener('loadedmetadata', onLoaded);
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                cleanup();
                 resolve();
             };
-            video.addEventListener('loadedmetadata', onLoaded);
-            setTimeout(resolve, 3000);
+
+            const events = ['loadedmetadata', 'loadeddata', 'canplay', 'playing', 'timeupdate'];
+            const onMediaEvent = () => finish();
+            events.forEach(ev => video.addEventListener(ev, onMediaEvent, { once: true }));
+
+            // Active polling: check if duration/readiness populated or TOC marked complete
+            const pollInterval = setInterval(() => {
+                if (globalState.abortRequested || isCurrentLinkedInLessonCompleted()) {
+                    finish();
+                    return;
+                }
+                if (!isNaN(video.duration) && video.duration > 0 && video.readyState >= 1) {
+                    finish();
+                    return;
+                }
+                if (video.currentTime > 0) {
+                    finish();
+                    return;
+                }
+                // Proactively kickstart playback so HLS manifest is requested
+                triggerLinkedInNativePlay(video);
+            }, 200);
+
+            // Maximum failsafe timeout - NEVER hang indefinitely on metadata
+            const timeoutTimer = setTimeout(() => {
+                log("[LinkedIn] Metadata timeout elapsed — proceeding directly with stream playback.", "warning");
+                finish();
+            }, 3500);
+
+            const cleanup = () => {
+                clearInterval(pollInterval);
+                clearTimeout(timeoutTimer);
+                events.forEach(ev => video.removeEventListener(ev, onMediaEvent));
+            };
         });
+    }
+
+    // Re-check: did the lesson complete during initialization?
+    if (isCurrentLinkedInLessonCompleted()) {
+        log("[LinkedIn] 🎯 Smart Detection: Lesson registered COMPLETED by LinkedIn Learning! Advancing...", "success");
+        return true;
     }
 
     // Apply speed via multi-tier system (MAIN world injection + content script)
@@ -5714,7 +5842,7 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
     try {
         await video.play();
     } catch(e) {
-        log(`[LinkedIn] Playback notice: ${e.message}`, "warning");
+        triggerLinkedInNativePlay(video);
     }
 
     log(`[LinkedIn] 🚀 Fast-forwarding video at ${targetSpeed}x Turbo speed (muted)...`);
@@ -5792,23 +5920,26 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
             if (!isProgressing) {
                 stuckCount++;
 
-                // 2.5s stall: nudge currentTime and unpause
+                // 2.5s stall: nudge currentTime, unpause, and trigger native play
                 if (stuckCount === 10) {
                     log("[LinkedIn] Buffering stall detected. Nudging video playback...", "warning");
-                    video.currentTime += 0.5;
+                    triggerLinkedInNativePlay(video);
+                    if (video.duration > 2 && video.currentTime > 0.5) {
+                        video.currentTime += 0.25;
+                    }
                     video.play().catch(() => {});
                 }
-                // 5.0s stall: refresh the video!
+                // 5.0s stall: safe non-destructive video stream recovery
                 else if (stuckCount === 20) {
                     await refreshLinkedInVideo(video);
                 }
-                // 8.0s stall: step down speed to 4x to recover buffer
+                // 8.0s stall: step down speed to 4x to alleviate MSE buffer throttling
                 else if (stuckCount === 32) {
                     if (currentLinkedInSpeed > 4.0) {
                         log("[LinkedIn] Stepping down speed to 4x to alleviate MSE buffer throttling...", "warning");
                         applyLinkedInSpeed(4.0);
                     }
-                    video.currentTime += 1.0;
+                    triggerLinkedInNativePlay(video);
                     video.play().catch(() => {});
                 }
                 // 12.0s stall: complete freeze - reload page to recover

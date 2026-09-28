@@ -18,13 +18,18 @@
   - **Smart Instant Checkmark Advance (`isCurrentLinkedInLessonCompleted`)**:
     - Discovered that LinkedIn Learning registers completion telemetry with the server well before the final video frame (typically at ~75-85% playback or on progress ping), rendering an SVG checkmark (`svg[data-test-icon*="check"]`), `.classroom-toc-item--completed`, or Up-Next card.
     - Implemented `isCurrentLinkedInLessonCompleted()` continuous poll in `playLinkedInVideoToCompletion`. The instant the active TOC item acquires a completion checkmark or Up-Next appears, it terminates video playback and advances immediately to the next video, saving substantial time.
-  - **Stuck / Buffering Watchdog & Auto-Refresh (`refreshLinkedInVideo`)**:
+  - **Stuck / Buffering Watchdog & Non-Destructive MSE Recovery (`refreshLinkedInVideo`)**:
     - Fixed stalled detection logic to detect freezes both while playing (`currentTime` frozen) and while unexpectedly paused (`video.paused && !video.ended`).
-    - Engineered 4-stage progressive recovery:
-      - 2.5s stall: Nudges `video.currentTime += 0.5` and calls `video.play()`.
-      - 5.0s stall: Refreshes the video stream by triggering player retry/play buttons and calling `video.load()` to reconnect the HTML5 media resource without losing course state.
-      - 8.0s stall: Steps down speed to 4x to relieve MSE network buffer throttling.
+    - Eliminated destructive `video.load()` calls which severed the browser's `MediaSource` MSE pipeline and caused infinite spinner hangs.
+    - Re-engineered 4-stage progressive recovery:
+      - 2.5s stall: Triggers native play and safe seek nudge (`+0.25s`) without interrupting media pipeline.
+      - 5.0s stall: Refreshes stream non-destructively: clicks native retry/play buttons, primes muted state, performs seek nudge, and triggers native playback.
+      - 8.0s stall: Steps down speed to 4x to relieve MSE network buffer throttling and triggers native play.
       - 12.0s stall: Reloads page with persistent queue auto-resume.
+  - **Proactive Video Priming & Failsafe Metadata Resolution (`waitForLinkedInVideo` & `playLinkedInVideoToCompletion`)**:
+    - Eliminated the 12s idle wait in `waitForLinkedInVideo`: immediately primes the video element (`muted = true`, `defaultMuted = true`, `volume = 0`) upon DOM discovery and triggers native play so LinkedIn's HLS player initiates stream buffering.
+    - Replaced the passive 3s single-listener wait with a proactive multi-event race (`loadedmetadata`, `loadeddata`, `canplay`, `playing`, `timeupdate`) paired with an active 200ms polling loop and a hard 3.5s failsafe timeout.
+    - Added instant completion short-circuit: if the TOC checkmark appears during stream initialization, playback resolves immediately without waiting.
   - **Automatic Quiz & Assessment Skipper (`isLinkedInQuizPage`, `skipLinkedInQuizIfPresent`, `scanLinkedInTOC`)**:
     - Upgraded `scanLinkedInTOC()` to detect chapter quizzes, practice exams, assessments, and knowledge checks via regex title matching, URLs (`/quiz/`, `/assessment/`), ARIA labels, and SVG icons.
     - Separated `uncompletedVideos` from quizzes; the sequential advancer (`advanceToNextLinkedInVideo`) exclusively targets uncompleted video lessons and completely bypasses quizzes in the syllabus.

@@ -23,6 +23,9 @@ function setRunningUIState(isRunning) {
     const liSingleBtn = document.getElementById('linkedinSingleBtn');
     if (liSingleBtn) liSingleBtn.disabled = isRunning;
 
+    const liStartPathBtn = document.getElementById('linkedinStartPathBtn');
+    if (liStartPathBtn) liStartPathBtn.disabled = isRunning;
+
     // Keep speed selector active during playback so user can switch speed dynamically
     const liSpeedSelect = document.getElementById('linkedinSpeedSelect');
     
@@ -455,17 +458,169 @@ if (linkedinSpeedSelect) {
     });
 }
 
-// Stop Button
-document.getElementById('stopBtn').addEventListener('click', async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) return;
+// =========================================================================
+// LinkedIn Learning Path Worker Pool UI & Controls
+// =========================================================================
+let activePathRunning = false;
+let detectedLinkedInContext = null;
 
-    document.getElementById('status').innerText = "Stopping...";
-    sendTabMessageWithAutoInject(tab.id, { action: "stop_process" }, (response, err) => {
-        if (err) {
-            document.getElementById('status').innerText = "Could not reach tab.";
+function renderPathWorkerState(state) {
+    if (!state) return;
+    const workerTray = document.getElementById('linkedinWorkerTray');
+    const workerTrayCount = document.getElementById('workerTrayCount');
+    const workerList = document.getElementById('workerList');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const progressStep = document.getElementById('progressStep');
+    const statusEl = document.getElementById('status');
+
+    activePathRunning = !!state.isRunning;
+
+    if (state.isRunning || (state.courses && state.courses.length > 0)) {
+        if (workerTray) workerTray.style.display = 'block';
+        if (workerTrayCount) {
+            workerTrayCount.innerText = `${state.activeWorkerCount || 0} active • ${state.completedCourses || 0}/${state.totalCourses || 0} done`;
+        }
+    }
+
+    if (workerList && Array.isArray(state.courses)) {
+        workerList.innerHTML = '';
+        state.courses.forEach((c) => {
+            const item = document.createElement('div');
+            item.className = 'worker-item';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'worker-name';
+            nameSpan.innerText = `${c.index}. ${c.title}`;
+            nameSpan.title = c.title;
+
+            const badgeSpan = document.createElement('span');
+            let badgeClass = 'badge-queued';
+            let badgeText = 'Queued';
+
+            if (c.status === 'completed') {
+                badgeClass = 'badge-done';
+                badgeText = '100% ✓';
+            } else if (c.status === 'running') {
+                badgeClass = 'badge-running';
+                badgeText = c.percent > 0 ? `${c.percent}%` : 'Running...';
+            } else if (c.status === 'failed') {
+                badgeClass = 'badge-queued';
+                badgeText = 'Failed';
+            }
+
+            badgeSpan.className = `worker-badge ${badgeClass}`;
+            badgeSpan.innerText = badgeText;
+
+            item.appendChild(nameSpan);
+            item.appendChild(badgeSpan);
+            workerList.appendChild(item);
+        });
+    }
+
+    if (state.totalCourses > 0) {
+        const pct = Math.round((state.completedCourses / state.totalCourses) * 100);
+        if (progressContainer) progressContainer.style.display = 'block';
+        if (progressBar) progressBar.style.width = pct + '%';
+        if (progressText) progressText.innerText = `${pct}%`;
+        if (progressStep) progressStep.innerText = `${state.completedCourses}/${state.totalCourses} courses complete`;
+        if (statusEl && state.isRunning) {
+            statusEl.innerText = `Parallel Workers: ${state.activeWorkerCount} tabs active (max ${state.maxConcurrency})...`;
+        }
+    }
+}
+
+// Concurrency Selector (Pills 1 - 5, default 3)
+const concurrencyPills = document.querySelectorAll('.concurrency-pill');
+concurrencyPills.forEach(pill => {
+    pill.addEventListener('click', () => {
+        concurrencyPills.forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        const conc = parseInt(pill.getAttribute('data-concurrency'), 10) || 3;
+        chrome.storage.local.set({ linkedinPathConcurrency: conc });
+        chrome.runtime.sendMessage({ action: "set_path_concurrency", concurrency: conc }).catch(() => {});
+    });
+});
+
+// Learning Path Start Hero Button
+const linkedinStartPathBtn = document.getElementById('linkedinStartPathBtn');
+if (linkedinStartPathBtn) {
+    linkedinStartPathBtn.addEventListener('click', async () => {
+        if (!detectedLinkedInContext || !detectedLinkedInContext.courses || detectedLinkedInContext.courses.length === 0) {
+            document.getElementById('status').innerText = "No courses detected in this Learning Path.";
+            return;
+        }
+
+        const activePill = document.querySelector('.concurrency-pill.active');
+        const concurrency = activePill ? parseInt(activePill.getAttribute('data-concurrency'), 10) || 3 : 3;
+
+        const speedSelect = document.getElementById('linkedinSpeedSelect');
+        const speed = speedSelect ? parseFloat(speedSelect.value) || 16.0 : 16.0;
+
+        setRunningUIState(true);
+        activePathRunning = true;
+        document.getElementById('status').innerText = `Spawning Worker Tabs (max ${concurrency} at once)...`;
+        const workerTray = document.getElementById('linkedinWorkerTray');
+        if (workerTray) workerTray.style.display = 'block';
+
+        chrome.runtime.sendMessage({
+            action: "start_learning_path",
+            pathTitle: detectedLinkedInContext.pathTitle || "Learning Path",
+            pathUrl: detectedLinkedInContext.pathUrl || "",
+            courses: detectedLinkedInContext.courses,
+            maxConcurrency: concurrency,
+            speed: speed
+        }, (resp) => {
+            if (chrome.runtime.lastError) {
+                setRunningUIState(false);
+                activePathRunning = false;
+                document.getElementById('status').innerText = "Failed to launch path workers.";
+            } else {
+                appendLog({
+                    text: `Started Learning Path Worker Pool: ${detectedLinkedInContext.courses.length} courses, ${concurrency} parallel tabs`,
+                    type: "info"
+                });
+            }
+        });
+    });
+}
+
+// Switch to Path Button (when on single course that belongs to a path)
+const linkedinSwitchPathBtn = document.getElementById('linkedinSwitchPathBtn');
+if (linkedinSwitchPathBtn) {
+    linkedinSwitchPathBtn.addEventListener('click', async () => {
+        if (detectedLinkedInContext && detectedLinkedInContext.parentPathUrl) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tab && tab.id) {
+                await chrome.tabs.update(tab.id, { url: detectedLinkedInContext.parentPathUrl });
+                window.close();
+            }
         }
     });
+}
+
+// Stop Button (Handles both single process and background worker pool)
+document.getElementById('stopBtn').addEventListener('click', async () => {
+    document.getElementById('status').innerText = "Stopping...";
+
+    if (activePathRunning) {
+        chrome.runtime.sendMessage({ action: "stop_learning_path" }, () => {
+            activePathRunning = false;
+            setRunningUIState(false);
+            document.getElementById('status').innerText = "Learning Path workers stopped.";
+            appendLog({ text: "Learning path worker pool stopped by user.", type: "warning" });
+        });
+    }
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && tab.id) {
+        sendTabMessageWithAutoInject(tab.id, { action: "stop_process" }, (response, err) => {
+            if (err) {
+                document.getElementById('status').innerText = "Could not reach tab.";
+            }
+        });
+    }
 });
 
 document.getElementById('startBtn').addEventListener('click', async () => {
@@ -533,6 +688,54 @@ document.getElementById('readBtn').addEventListener('click', async () => {
 
 // Check for running process or existing state on load & adapt platform UI
 (async () => {
+    // 1. First check if a background Learning Path worker pool is already running!
+    chrome.runtime.sendMessage({ action: "get_learning_path_state" }, (res) => {
+        if (chrome.runtime.lastError || !res || !res.state) return;
+        const state = res.state;
+
+        if (state.isRunning) {
+            activePathRunning = true;
+            const platformTag = document.getElementById('platformTag');
+            const linkedinSection = document.getElementById('linkedinSection');
+            const courseraSection = document.getElementById('courseraSection');
+            const aiSettingsSection = document.getElementById('aiSettingsSection');
+            const pathControls = document.getElementById('linkedinPathControls');
+            const courseControls = document.getElementById('linkedinCourseControls');
+
+            if (linkedinSection) linkedinSection.style.display = 'block';
+            if (courseraSection) courseraSection.style.display = 'none';
+            if (aiSettingsSection) aiSettingsSection.style.display = 'none';
+            if (pathControls) pathControls.style.display = 'block';
+            if (courseControls) courseControls.style.display = 'none';
+            if (platformTag) platformTag.innerText = "LinkedIn (Path)";
+
+            const titleEl = document.getElementById('linkedinContextTitle');
+            const tagEl = document.getElementById('linkedinContextTag');
+            const subEl = document.getElementById('linkedinContextSub');
+            if (titleEl) titleEl.innerText = state.pathTitle || "Learning Path";
+            if (tagEl) {
+                tagEl.innerText = "Learning Path";
+                tagEl.className = "context-tag";
+            }
+            if (subEl) subEl.innerText = `${state.completedCourses}/${state.totalCourses} courses complete`;
+
+            // Highlight active concurrency pill
+            if (state.maxConcurrency) {
+                const pills = document.querySelectorAll('.concurrency-pill');
+                pills.forEach(p => {
+                    if (parseInt(p.getAttribute('data-concurrency'), 10) === state.maxConcurrency) {
+                        p.classList.add('active');
+                    } else {
+                        p.classList.remove('active');
+                    }
+                });
+            }
+
+            renderPathWorkerState(state);
+            setRunningUIState(true);
+        }
+    });
+
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !tab.url) return;
 
@@ -543,6 +746,8 @@ document.getElementById('readBtn').addEventListener('click', async () => {
     const linkedinSection = document.getElementById('linkedinSection');
     const courseraSection = document.getElementById('courseraSection');
     const aiSettingsSection = document.getElementById('aiSettingsSection');
+    const pathControls = document.getElementById('linkedinPathControls');
+    const courseControls = document.getElementById('linkedinCourseControls');
 
     if (isLinkedIn) {
         if (linkedinSection) linkedinSection.style.display = 'block';
@@ -554,6 +759,74 @@ document.getElementById('readBtn').addEventListener('click', async () => {
             platformTag.style.borderColor = "";
         }
         document.getElementById('status').innerText = "Ready on LinkedIn Learning";
+
+        // Restore saved concurrency preference
+        chrome.storage.local.get(['linkedinPathConcurrency'], (res) => {
+            const targetConc = parseInt(res.linkedinPathConcurrency, 10) || 3;
+            const pills = document.querySelectorAll('.concurrency-pill');
+            pills.forEach(p => {
+                if (parseInt(p.getAttribute('data-concurrency'), 10) === targetConc) {
+                    p.classList.add('active');
+                } else {
+                    p.classList.remove('active');
+                }
+            });
+        });
+
+        // Query active tab context (Learning Path vs Single Course)
+        sendTabMessageWithAutoInject(tab.id, { action: "get_linkedin_context" }, (ctx) => {
+            if (!ctx) return;
+            detectedLinkedInContext = ctx;
+
+            const titleEl = document.getElementById('linkedinContextTitle');
+            const tagEl = document.getElementById('linkedinContextTag');
+            const subEl = document.getElementById('linkedinContextSub');
+            const switchBtn = document.getElementById('linkedinSwitchPathBtn');
+
+            if (ctx.isPathPage) {
+                // User is viewing a Learning Path!
+                if (pathControls) pathControls.style.display = 'block';
+                if (courseControls) courseControls.style.display = 'none';
+                if (titleEl) titleEl.innerText = ctx.pathTitle || "Learning Path";
+                if (tagEl) {
+                    tagEl.innerText = "Learning Path";
+                    tagEl.className = "context-tag";
+                }
+                const remaining = (ctx.totalCourses || 0) - (ctx.completedCourses || 0);
+                if (subEl) subEl.innerText = `${ctx.totalCourses || 0} courses • ${remaining} to complete`;
+                if (switchBtn) switchBtn.style.display = 'none';
+
+                // Initial render of detected courses list in tray
+                renderPathWorkerState({
+                    isRunning: false,
+                    courses: ctx.courses,
+                    totalCourses: ctx.totalCourses,
+                    completedCourses: ctx.completedCourses,
+                    maxConcurrency: 3,
+                    activeWorkerCount: 0
+                });
+            } else {
+                // User is viewing a Single Course
+                if (pathControls) pathControls.style.display = 'none';
+                if (courseControls) courseControls.style.display = 'block';
+                if (titleEl) titleEl.innerText = ctx.courseTitle || "Single Course";
+                if (tagEl) {
+                    tagEl.innerText = "Single Course";
+                    tagEl.className = "context-tag single";
+                }
+                if (subEl) subEl.innerText = `${ctx.completedVideos || 0}/${ctx.totalVideos || 0} videos watched`;
+
+                if (ctx.hasParentPath && ctx.parentPathUrl) {
+                    if (switchBtn) {
+                        switchBtn.style.display = 'inline-block';
+                        switchBtn.innerText = "View Path →";
+                        switchBtn.title = ctx.parentPathTitle || "Open Parent Learning Path";
+                    }
+                } else {
+                    if (switchBtn) switchBtn.style.display = 'none';
+                }
+            }
+        });
     } else if (isCoursera) {
         if (linkedinSection) linkedinSection.style.display = 'none';
         if (courseraSection) courseraSection.style.display = 'block';
@@ -749,6 +1022,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         document.getElementById('progressBar').style.width = percentage + '%';
         document.getElementById('progressText').innerText = `${percentage}%`;
         document.getElementById('progressStep').innerText = message;
+    }
+    if (request.action === "path_progress_update") {
+        renderPathWorkerState(request.state);
+    }
+    if (request.action === "path_all_completed") {
+        activePathRunning = false;
+        setRunningUIState(false);
+        document.getElementById('status').innerText = "🎉 All Courses in Path Completed!";
+        appendLog({
+            text: `🎉 All courses in "${request.pathTitle}" have been successfully completed!`,
+            type: "success"
+        });
+        renderPathWorkerState(request.state);
     }
     if (request.action === "summary_report") {
         renderSummaryReport(request.data);

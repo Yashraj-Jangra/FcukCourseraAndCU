@@ -203,6 +203,164 @@
       color: var(--text-primary);
     }
 
+    /* Learning Path & Context Cards */
+    .context-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 9px 11px;
+      margin-bottom: 8px;
+    }
+    .context-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .context-title {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 220px;
+    }
+    .context-tag {
+      font-size: 9.5px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: rgba(2, 132, 199, 0.15);
+      color: #38bdf8;
+      border: 1px solid rgba(2, 132, 199, 0.3);
+    }
+    .context-tag.single {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+    .context-meta {
+      font-size: 10px;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .context-link-btn {
+      background: transparent;
+      border: none;
+      color: #38bdf8;
+      font-size: 10px;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+    }
+
+    /* Concurrency Pill Bar */
+    .concurrency-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 4px 8px;
+      margin-bottom: 8px;
+    }
+    .concurrency-label {
+      font-size: 10.5px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+    .concurrency-pills {
+      display: flex;
+      gap: 4px;
+    }
+    .concurrency-pill {
+      min-width: 24px;
+      height: 22px;
+      padding: 0 6px;
+      font-size: 10px;
+      font-weight: 600;
+      border-radius: 4px;
+      background: var(--bg-root);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.12s ease;
+    }
+    .concurrency-pill:hover {
+      color: var(--text-primary);
+      border-color: var(--border-medium);
+    }
+    .concurrency-pill.active {
+      background: #0284c7;
+      border-color: #0284c7;
+      color: #ffffff;
+    }
+
+    /* Worker Progress Tray */
+    .worker-tray {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      max-height: 125px;
+      overflow-y: auto;
+    }
+    .worker-tray-title {
+      font-size: 9.5px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .worker-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 0;
+      font-size: 10px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .worker-item:last-child {
+      border-bottom: none;
+    }
+    .worker-name {
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 200px;
+    }
+    .worker-badge {
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .badge-queued {
+      color: var(--text-muted);
+      background: var(--bg-root);
+    }
+    .badge-running {
+      color: #38bdf8;
+      background: rgba(2, 132, 199, 0.2);
+    }
+    .badge-done {
+      color: #34d399;
+      background: rgba(16, 185, 129, 0.2);
+    }
+
     /* Stop Button */
     .btn-stop {
       display: none;
@@ -561,23 +719,67 @@
 
   <!-- LinkedIn Learning Actions View -->
   <section id="linkedinSection" style="display: none;">
-    <button id="linkedinCompleteBtn" class="btn-hero" style="background: #0284c7;">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 19 22 12 13 5 13 19"></polygon><polygon points="2 19 11 12 2 5 2 19"></polygon></svg>
-      <span>Complete All Videos</span>
-    </button>
-    <div class="action-grid-2" style="margin-bottom: 10px;">
-      <button id="linkedinSingleBtn" class="btn-action">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-        <span>Fast-Forward Video</span>
+    <!-- Context Card (Auto-detected: Learning Path vs Single Course) -->
+    <div id="linkedinContextCard" class="context-card">
+      <div class="context-header">
+        <span id="linkedinContextTitle" class="context-title">LinkedIn Learning</span>
+        <span id="linkedinContextTag" class="context-tag">Single Course</span>
+      </div>
+      <div class="context-meta">
+        <span id="linkedinContextSub">Detecting content...</span>
+        <button id="linkedinSwitchPathBtn" class="context-link-btn" style="display: none;">View Path</button>
+      </div>
+    </div>
+
+    <!-- Learning Path Actions (Visible when on Learning Path) -->
+    <div id="linkedinPathControls" style="display: none;">
+      <!-- Concurrency Selector -->
+      <div class="concurrency-box">
+        <span class="concurrency-label">Parallel Tabs</span>
+        <div id="concurrencyPills" class="concurrency-pills">
+          <button class="concurrency-pill" data-concurrency="1">1</button>
+          <button class="concurrency-pill" data-concurrency="2">2</button>
+          <button class="concurrency-pill active" data-concurrency="3">3</button>
+          <button class="concurrency-pill" data-concurrency="4">4</button>
+          <button class="concurrency-pill" data-concurrency="5">5</button>
+        </div>
+      </div>
+
+      <button id="linkedinStartPathBtn" class="btn-hero" style="background: #0284c7;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 19 22 12 13 5 13 19"></polygon><polygon points="2 19 11 12 2 5 2 19"></polygon></svg>
+        <span id="linkedinStartPathText">Complete Entire Learning Path</span>
       </button>
-      <div class="speed-control-box">
-        <span class="speed-control-label">Speed</span>
-        <select id="linkedinSpeedSelect" class="speed-dropdown">
-          <option value="16" selected>16x Turbo</option>
-          <option value="8">8x Ultra</option>
-          <option value="4">4x Fast</option>
-          <option value="2">2x Native</option>
-        </select>
+
+      <!-- Worker Tray (Active during Path processing) -->
+      <div id="linkedinWorkerTray" class="worker-tray" style="display: none;">
+        <div class="worker-tray-title">
+          <span>Parallel Sub-Workers</span>
+          <span id="workerTrayCount">0 active</span>
+        </div>
+        <div id="workerList"></div>
+      </div>
+    </div>
+
+    <!-- Single Course Actions (Visible when on Single Course) -->
+    <div id="linkedinCourseControls">
+      <button id="linkedinCompleteBtn" class="btn-hero" style="background: #0284c7;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 19 22 12 13 5 13 19"></polygon><polygon points="2 19 11 12 2 5 2 19"></polygon></svg>
+        <span>Complete All Videos</span>
+      </button>
+      <div class="action-grid-2" style="margin-bottom: 10px;">
+        <button id="linkedinSingleBtn" class="btn-action">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+          <span>Fast-Forward Video</span>
+        </button>
+        <div class="speed-control-box">
+          <span class="speed-control-label">Speed</span>
+          <select id="linkedinSpeedSelect" class="speed-dropdown">
+            <option value="16" selected>16x Turbo</option>
+            <option value="8">8x Ultra</option>
+            <option value="4">4x Fast</option>
+            <option value="2">2x Native</option>
+          </select>
+        </div>
       </div>
     </div>
   </section>

@@ -180,6 +180,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ status: "started" });
     }
 
+    if (request.action === "get_linkedin_context") {
+        sendResponse(getLinkedInContext());
+        return true;
+    }
+
     if (request.action === "start_linkedin_videos") {
         if (globalState.isRunning) {
             sendResponse({ status: "already_running" });
@@ -189,7 +194,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         globalState.abortRequested = false;
         globalState.currentAction = "linkedin_video";
         const speed = request.speed || 16.0;
-        startLinkedInCourseCompletionProcess({ speed: speed, singleVideoOnly: false }).finally(() => { 
+        startLinkedInCourseCompletionProcess({ 
+            speed: speed, 
+            singleVideoOnly: false,
+            isWorkerTab: !!request.isWorkerTab,
+            courseId: request.courseId,
+            courseTitle: request.courseTitle
+        }).finally(() => { 
             globalState.isRunning = false;
             globalState.abortRequested = false;
         });
@@ -5330,6 +5341,179 @@ function applyLinkedInSpeed(speed = 16.0) {
     }
 }
 
+// =========================================================================
+// LinkedIn Learning Path Context Detection, Scanner & Anti-Pause Heartbeat
+// =========================================================================
+
+function startTabKeepAliveHeartbeat() {
+    try {
+        if (window.__fcukHeartbeatActive) return;
+        window.__fcukHeartbeatActive = true;
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+            const ctx = new AudioContextClass();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            gain.gain.value = 0.00001; // Silent
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+        }
+    } catch(e) {}
+}
+
+function isLinkedInLearningPathPage() {
+    return (window.location.pathname || '').toLowerCase().includes('/learning/paths/');
+}
+
+function detectLinkedInParentPath() {
+    try {
+        const pathLink = document.querySelector(
+            'a[href*="/learning/paths/"], ' +
+            '[data-control-name="learning_path_breadcrumb"] a, ' +
+            '.learning-path-breadcrumb a'
+        );
+        if (pathLink) {
+            return {
+                hasParentPath: true,
+                pathUrl: pathLink.href,
+                pathTitle: pathLink.innerText?.trim() || "Parent Learning Path"
+            };
+        }
+    } catch(e) {}
+    return { hasParentPath: false, pathUrl: null, pathTitle: null };
+}
+
+function scanLinkedInLearningPath() {
+    const pathTitle = (
+        document.querySelector('h1')?.innerText ||
+        document.querySelector('.learning-path-header__title')?.innerText ||
+        document.querySelector('[class*="learning-path"] h1')?.innerText ||
+        document.title || "Learning Path"
+    ).replace(/\| LinkedIn Learning.*$/i, '').trim();
+
+    const pathUrl = window.location.href.split('?')[0];
+
+    // Find all candidate course links inside the learning path
+    const linkCandidates = Array.from(document.querySelectorAll(
+        'a[href*="/learning/"]:not([href*="/paths/"]):not([href*="/topics/"]):not([href*="/me/"]):not([href*="/search"]):not([href*="/feed"]):not([href*="/subscription"])'
+    ));
+
+    const courseMap = new Map();
+    let indexCounter = 1;
+
+    for (const link of linkCandidates) {
+        try {
+            const rawHref = link.getAttribute('href') || link.href;
+            if (!rawHref) continue;
+
+            const urlObj = new URL(rawHref, window.location.origin);
+            const pathname = urlObj.pathname.toLowerCase();
+
+            const segments = pathname.split('/').filter(Boolean);
+            if (segments.length < 2 || segments[0] !== 'learning') continue;
+
+            const courseSlug = segments[1];
+            if (['paths', 'me', 'topics', 'search', 'feed', 'subscription', 'certificates', 'instructors'].includes(courseSlug)) continue;
+
+            const canonicalUrl = `${window.location.origin}/learning/${courseSlug}`;
+
+            if (!courseMap.has(canonicalUrl)) {
+                // Find parent card / container for title and completion status
+                const card = link.closest(
+                    '.learning-path-item, ' +
+                    '[class*="learning-path-item"], ' +
+                    '[data-test-learning-path-item], ' +
+                    '.content-entity-card, ' +
+                    '.base-card, ' +
+                    'li[class*="path-course"], ' +
+                    'li[class*="course-item"], ' +
+                    'li'
+                ) || link;
+
+                // Title extraction
+                let title = link.innerText?.trim() || "";
+                const titleEl = card.querySelector('h2, h3, h4, .base-card__title, .content-entity-card__title, [class*="card-title"]');
+                if (titleEl && titleEl.innerText?.trim()) {
+                    title = titleEl.innerText.trim();
+                }
+                if (!title || title.length < 2) {
+                    title = courseSlug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                }
+
+                // Completion check
+                let isCompleted = false;
+                const checkIcon = card.querySelector(
+                    'svg[data-test-icon*="check" i], ' +
+                    'svg[type="check"], ' +
+                    '[data-test-icon="check-small"], ' +
+                    '[class*="completed" i], ' +
+                    '[class*="is-complete" i]'
+                );
+                const cardText = (card.innerText || '').toLowerCase();
+                const cardAria = (card.getAttribute('aria-label') || '').toLowerCase();
+
+                if (checkIcon || 
+                    card.classList.contains('is-complete') || 
+                    card.classList.contains('completed') || 
+                    cardText.includes('completed') || 
+                    cardAria.includes('completed')) {
+                    isCompleted = true;
+                }
+
+                courseMap.set(canonicalUrl, {
+                    id: `course_${courseSlug}`,
+                    slug: courseSlug,
+                    index: indexCounter++,
+                    title: title,
+                    url: canonicalUrl,
+                    isCompleted: isCompleted
+                });
+            }
+        } catch(e) {}
+    }
+
+    const courses = Array.from(courseMap.values());
+    return {
+        isPath: true,
+        pathTitle: pathTitle,
+        pathUrl: pathUrl,
+        totalCourses: courses.length,
+        completedCourses: courses.filter(c => c.isCompleted).length,
+        courses: courses
+    };
+}
+
+function getLinkedInContext() {
+    const isPath = isLinkedInLearningPathPage();
+    if (isPath) {
+        const pathData = scanLinkedInLearningPath();
+        return {
+            platform: "linkedin",
+            isPathPage: true,
+            pathTitle: pathData.pathTitle,
+            pathUrl: pathData.pathUrl,
+            courses: pathData.courses,
+            totalCourses: pathData.totalCourses,
+            completedCourses: pathData.completedCourses
+        };
+    } else {
+        const parentPath = detectLinkedInParentPath();
+        const toc = scanLinkedInTOC();
+        return {
+            platform: "linkedin",
+            isPathPage: false,
+            courseTitle: document.title.replace(/\| LinkedIn Learning.*$/i, '').trim(),
+            courseUrl: window.location.href,
+            hasParentPath: parentPath.hasParentPath,
+            parentPathUrl: parentPath.pathUrl,
+            parentPathTitle: parentPath.pathTitle,
+            totalVideos: toc.totalCount,
+            completedVideos: toc.completedCount
+        };
+    }
+}
+
 function getLinkedInVideo() {
     // 1. Look for active video in classroom player containers
     const playerSelectors = [
@@ -6114,14 +6298,20 @@ function stopLinkedInVideoPlayback() {
 async function startLinkedInCourseCompletionProcess(options = {}) {
     const targetSpeed = options.speed || 16.0;
     const singleOnly = !!options.singleVideoOnly;
+    const isWorkerTab = !!options.isWorkerTab;
+    const courseId = options.courseId || null;
     currentLinkedInSpeed = targetSpeed;
 
-    log("==========================================");
-    log(`[LinkedIn Learning] Initializing Video Completer (${targetSpeed}x Turbo)...`);
-    log("==========================================");
-    showOnScreenHUD("LinkedIn Learning: Initializing Video Completer...", "working");
+    if (isWorkerTab) {
+        startTabKeepAliveHeartbeat();
+    }
 
-    if (!singleOnly) {
+    log("==========================================");
+    log(`[LinkedIn Learning] Initializing Video Completer (${targetSpeed}x Turbo)${isWorkerTab ? ' [Worker Mode]' : ''}...`);
+    log("==========================================");
+    showOnScreenHUD(`LinkedIn: Initializing Video Completer (${targetSpeed}x)...`, "working");
+
+    if (!singleOnly && !isWorkerTab) {
         await chrome.storage.local.set({
             linkedinQueueRunning: true,
             linkedinTargetSpeed: targetSpeed
@@ -6152,9 +6342,28 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             updateStatus(`[${completed}/${total}] ${currentTitle}`);
             showOnScreenHUD(`⚡ [${completed + 1}/${total}] ${currentTitle.substring(0, 30)}...`, "working");
 
+            // Telemetry ping to background orchestrator
+            if (isWorkerTab && courseId) {
+                chrome.runtime.sendMessage({
+                    action: "path_worker_progress",
+                    courseId: courseId,
+                    percent: total > 0 ? Math.round((completed / total) * 100) : 0,
+                    currentTitle: currentTitle,
+                    completedVideos: completed,
+                    totalVideos: total
+                }).catch(() => {});
+            }
+
             if (toc.uncompletedVideos.length === 0 && loopSafety > 1) {
                 log("🎉 All videos in this LinkedIn Learning course are completed (100%)!");
                 showOnScreenHUD("🎉 Entire Course Completed 100%!", "success");
+                if (isWorkerTab && courseId) {
+                    await chrome.runtime.sendMessage({
+                        action: "path_worker_course_completed",
+                        courseId: courseId
+                    }).catch(() => {});
+                    return;
+                }
                 break;
             }
 
@@ -6179,9 +6388,27 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             const updatedToc = scanLinkedInTOC();
             updateProgress(updatedToc.completedCount, updatedToc.totalCount, "Advancing...");
 
+            if (isWorkerTab && courseId) {
+                chrome.runtime.sendMessage({
+                    action: "path_worker_progress",
+                    courseId: courseId,
+                    percent: updatedToc.totalCount > 0 ? Math.round((updatedToc.completedCount / updatedToc.totalCount) * 100) : 0,
+                    currentTitle: "Advancing...",
+                    completedVideos: updatedToc.completedCount,
+                    totalVideos: updatedToc.totalCount
+                }).catch(() => {});
+            }
+
             if (updatedToc.uncompletedVideos.length === 0) {
                 log("🎉 Entire course is now 100% completed!");
                 showOnScreenHUD("🎉 Entire Course Completed (100%)!", "success");
+                if (isWorkerTab && courseId) {
+                    await chrome.runtime.sendMessage({
+                        action: "path_worker_course_completed",
+                        courseId: courseId
+                    }).catch(() => {});
+                    return;
+                }
                 break;
             }
 
@@ -6189,6 +6416,13 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             if (!advanced) {
                 log("[LinkedIn] No further video lessons found. Course completed!");
                 showOnScreenHUD("🎉 Course Completed!", "success");
+                if (isWorkerTab && courseId) {
+                    await chrome.runtime.sendMessage({
+                        action: "path_worker_course_completed",
+                        courseId: courseId
+                    }).catch(() => {});
+                    return;
+                }
                 break;
             }
 
@@ -6208,10 +6442,12 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
         updateStatus(`Error: ${e.message}`);
         showOnScreenHUD(`Error: ${e.message}`, "error");
     } finally {
-        await chrome.storage.local.remove([
-            'linkedinQueueRunning',
-            'linkedinTargetSpeed'
-        ]).catch(() => {});
+        if (!isWorkerTab) {
+            await chrome.storage.local.remove([
+                'linkedinQueueRunning',
+                'linkedinTargetSpeed'
+            ]).catch(() => {});
+        }
 
         stopLinkedInVideoPlayback();
 
@@ -6219,7 +6455,9 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             hideOnScreenHUD();
         }, 4000);
 
-        chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+        if (!isWorkerTab) {
+            chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+        }
     }
 }
 

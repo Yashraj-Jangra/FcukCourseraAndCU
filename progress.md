@@ -2,6 +2,36 @@
 
 ## Session Summary (2026-09-28)
 
+- ✨ **LinkedIn Learning Path Multi-Course Parallel Worker Pool & Background Tab Orchestrator (`background.js`, `content.js`, `popup.html`, `popup.js`)**:
+  - **Learning Path Orchestration Architecture (`background.js`)**:
+    - Built a robust background service worker state machine (`pathOrchestrator`) that manages parallel course execution across entire LinkedIn Learning Paths (`/learning/paths/*`).
+    - Tracks per-course status (`queued`, `running`, `completed`, `failed`), real-time progress percentages, video counts, and worker tab IDs.
+    - Dispatches courses as background worker tabs (`chrome.tabs.create({ url, active: false })`) to eliminate screen focus stealing and allow silent background execution.
+    - Added automatic worker tab lifecycle management: listens for course completion signals (`path_worker_course_completed`), immediately closes the completed tab (`chrome.tabs.remove(tabId)`), and automatically dispatches the next queued course into the open pool slot until all courses in the path reach 100%.
+    - Added tab closure and crash watchdog: if a user or system closes a running worker tab prematurely, the orchestrator detects it via `chrome.tabs.onRemoved` and safely re-queues the course.
+  - **Background Tab Anti-Pause Visibility Spoofing & Audio Keep-Alive (`background.js` & `content.js`)**:
+    - Solved LinkedIn Learning's background tab pausing behavior: LinkedIn's Video.js / React player listens to `visibilitychange`, `blur`, and checks `document.hidden` / `document.visibilityState` to pause playback when tabs are not in the foreground.
+    - Implemented `injectMainWorldAntiPauseAndSpeed` in `background.js` running in the `MAIN` page world:
+      - Overrides `document.visibilityState` getter to always return `'visible'`.
+      - Overrides `document.hidden` getter to always return `false`.
+      - Overrides `document.hasFocus()` to always return `true`.
+      - Hooks capture-phase event listeners on `window` and `document` to immediately suppress (`stopImmediatePropagation()`) `visibilitychange`, `blur`, and `pagehide` events before the video player can receive them.
+      - Disables Chrome's tab discarding via `chrome.tabs.update(tabId, { autoDiscardable: false })`.
+    - Added `startTabKeepAliveHeartbeat` in `content.js`: starts a zero-volume (`gain = 0.00001`) inaudible Web Audio oscillator when operating as a worker tab, signaling to Chrome that the tab is actively rendering media and exempting it from background execution throttling and timer deprioritization.
+  - **Context Detection: Learning Path vs. Single Course (`content.js` & `popup.js`)**:
+    - Built `isLinkedInLearningPathPage()` and `scanLinkedInLearningPath()` in `content.js`: detects whether the active tab is a Learning Path overview, parses the path title, and extracts all child courses, URLs, and current completion checkmarks.
+    - Built `detectLinkedInParentPath()`: when the user is viewing a single course that is part of a larger Learning Path, detects the parent path breadcrumbs and metadata.
+    - Added `get_linkedin_context` message handler returning comprehensive metadata to the popup.
+    - In `popup.js`: dynamically toggles between Single Course controls (`Complete All Videos`, `Fast-Forward Video`) and Learning Path controls (`Complete Entire Learning Path`, Concurrency Selector, Parallel Sub-Workers Tray).
+    - Added "View Path →" deep-link button on single course cards to quickly navigate back to the parent Learning Path.
+  - **User-Configurable Parallel Concurrency Selector (`popup.html` & `popup.js`)**:
+    - Added a sleek minimal pill bar (1–5 tabs, defaulting to **3** parallel tabs) with local storage persistence (`linkedinPathConcurrency`).
+    - Dynamically updates active concurrency in real time during a run via `set_path_concurrency`.
+  - **Parallel Sub-Workers Tray & Live Telemetry (`popup.html` & `popup.js`)**:
+    - Created `#linkedinWorkerTray` and `#workerList` in `popup.html` displaying running status badges (`Queued`, `Running... (X%)`, `100% ✓`) for all courses in the path.
+    - Integrated real-time course progress updates via `path_worker_progress` and `path_progress_update`.
+    - Wired `#stopBtn` to cleanly abort the entire worker pool, close all active worker tabs, and re-queue pending courses.
+
 - 🎨 **Minimal Sleek Modern UI Redesign (`popup.html`, `popup.js`, `progress.md`)**:
   - Replaced tacky AI-style neon gradients, glowing cyan borders, and emoji-cluttered button labels with a clean, understated, developer-grade aesthetic inspired by Raycast and Linear.
   - Built a refined design system with a deep matte charcoal palette (`#0e1015`, `#14171f`, `#1a1e27`), subtle 1px border lines (`rgba(255, 255, 255, 0.07)`), and crisp neutral typography (`#f4f4f6`, `#9da1b0`, `#646877`).

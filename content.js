@@ -6076,53 +6076,76 @@ function initHudDragging(hud) {
     const header = hud.querySelector('#hudDragHeader');
     if (!header) return;
 
-    header.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('.hud-btn-icon')) return;
-        if (hud.classList.contains('minimized')) return;
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let initialLeft = 0;
+    let initialTop = 0;
 
-        hudDragState.isDragging = true;
-        hudDragState.startX = e.clientX;
-        hudDragState.startY = e.clientY;
+    const onPointerMove = (e) => {
+        if (!isDragging) return;
+        e.preventDefault();
 
-        const rect = hud.getBoundingClientRect();
-        hudDragState.initialLeft = rect.left;
-        hudDragState.initialTop = rect.top;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
 
-        hud.setPointerCapture(e.pointerId);
-    });
-
-    header.addEventListener('pointermove', (e) => {
-        if (!hudDragState.isDragging) return;
-
-        const dx = e.clientX - hudDragState.startX;
-        const dy = e.clientY - hudDragState.startY;
-
-        let newLeft = hudDragState.initialLeft + dx;
-        let newTop = hudDragState.initialTop + dy;
+        let newLeft = initialLeft + dx;
+        let newTop = initialTop + dy;
 
         // Viewport bounds clamping
-        newLeft = Math.max(10, Math.min(window.innerWidth - hud.offsetWidth - 10, newLeft));
-        newTop = Math.max(10, Math.min(window.innerHeight - hud.offsetHeight - 10, newTop));
+        const maxLeft = Math.max(10, window.innerWidth - hud.offsetWidth - 10);
+        const maxTop = Math.max(10, window.innerHeight - hud.offsetHeight - 10);
+
+        newLeft = Math.max(10, Math.min(maxLeft, newLeft));
+        newTop = Math.max(10, Math.min(maxTop, newTop));
 
         hud.style.left = `${newLeft}px`;
         hud.style.top = `${newTop}px`;
         hud.style.bottom = 'auto';
         hud.style.right = 'auto';
-    });
-
-    const onPointerUp = (e) => {
-        if (hudDragState.isDragging) {
-            hudDragState.isDragging = false;
-            try { hud.releasePointerCapture(e.pointerId); } catch(err) {}
-            const rect = hud.getBoundingClientRect();
-            chrome.storage.local.set({
-                fcukHudPosition: { x: Math.round(rect.left), y: Math.round(rect.top) }
-            }).catch(() => {});
-        }
     };
 
-    header.addEventListener('pointerup', onPointerUp);
-    header.addEventListener('pointercancel', onPointerUp);
+    const stopDragging = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        hudDragState.isDragging = false;
+        hud.classList.remove('dragging');
+
+        window.removeEventListener('pointermove', onPointerMove, { capture: true });
+        window.removeEventListener('pointerup', stopDragging, { capture: true });
+        window.removeEventListener('pointercancel', stopDragging, { capture: true });
+        window.removeEventListener('blur', stopDragging);
+
+        const rect = hud.getBoundingClientRect();
+        chrome.storage.local.set({
+            fcukHudPosition: { x: Math.round(rect.left), y: Math.round(rect.top) }
+        }).catch(() => {});
+    };
+
+    header.addEventListener('pointerdown', (e) => {
+        // Only primary mouse button (left click)
+        if (e.button !== 0) return;
+        // Never drag when clicking header buttons or selects
+        if (e.target.closest('.hud-btn-icon') || e.target.closest('button') || e.target.closest('select')) return;
+        // Never drag when minimized (click expands pill)
+        if (hud.classList.contains('minimized')) return;
+
+        isDragging = true;
+        hudDragState.isDragging = true;
+        hud.classList.add('dragging');
+        startX = e.clientX;
+        startY = e.clientY;
+
+        const rect = hud.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+
+        // Capture all pointer movements on the window so rapid dragging never breaks or loses track
+        window.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
+        window.addEventListener('pointerup', stopDragging, { capture: true });
+        window.addEventListener('pointercancel', stopDragging, { capture: true });
+        window.addEventListener('blur', stopDragging);
+    });
 }
 
 function attachHudControls(hud) {
@@ -6174,7 +6197,7 @@ function attachHudControls(hud) {
             const spd = parseFloat(speedSelect.value) || 16.0;
             currentLinkedInSpeed = spd;
             chrome.storage.local.set({ linkedinTargetSpeed: spd });
-            chrome.runtime.sendMessage({ action: "set_linkedin_speed", speed: spd }).catch(() => {});
+            chrome.runtime.sendMessage({ action: "set_path_speed", speed: spd }).catch(() => {});
         });
     }
 
@@ -6306,8 +6329,77 @@ function getLinkedInVideo() {
     return allVideos[0] || null;
 }
 
+function isAiChatbotElement(el) {
+    if (!el) return false;
+    try {
+        const aiSelectors = [
+            '[class*="ai-" i]',
+            '[class*="coach" i]',
+            '[class*="chatbot" i]',
+            '[class*="assistant" i]',
+            '[class*="messaging" i]',
+            '[class*="learning-bot" i]',
+            '[data-control-name*="ai" i]',
+            '[data-control-name*="coach" i]',
+            '[data-control-name*="chat" i]',
+            '[data-test-ai-assistant]',
+            '[id*="ai-" i]',
+            '[id*="coach" i]',
+            '[id*="chat" i]',
+            'aside[class*="drawer" i]',
+            '.msg-overlay-conversation-bubble',
+            '.msg-overlay-list-bubble'
+        ];
+        for (const sel of aiSelectors) {
+            if (el.matches && el.matches(sel)) return true;
+            if (el.closest && el.closest(sel)) return true;
+        }
+
+        const textAndAria = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '') + ' ' + (el.title || '')).toLowerCase();
+        const aiKeywords = ['ai', 'coach', 'chat', 'assistant', 'conversation', 'ask', 'bot', 'prompt'];
+        for (const kw of aiKeywords) {
+            const regex = new RegExp(`\\b${kw}\\b`, 'i');
+            if (regex.test(textAndAria)) {
+                return true;
+            }
+        }
+    } catch(e) {}
+    return false;
+}
+
+function dismissLinkedInAiChatbotIfOpen() {
+    try {
+        // 1. AI Coach / AI Assistant drawers
+        const aiDrawers = document.querySelectorAll(
+            '[class*="ai-coach" i], [class*="ai-assistant" i], [class*="coach-drawer" i], [class*="learning-bot" i], [data-test-ai-assistant], aside[class*="coach" i]'
+        );
+        for (const drawer of aiDrawers) {
+            if (drawer && (drawer.offsetParent !== null || drawer.clientWidth > 0)) {
+                const closeBtn = drawer.querySelector(
+                    'button[aria-label*="close" i], button[data-control-name*="close" i], button[class*="close" i], button[aria-label*="dismiss" i], button[aria-label*="collapse" i]'
+                );
+                if (closeBtn) {
+                    clickNativeElement(closeBtn);
+                }
+            }
+        }
+
+        // 2. LinkedIn Messaging overlay bubble that sometimes pops up
+        const msgOverlays = document.querySelectorAll(
+            '.msg-overlay-conversation-bubble, .msg-overlay-bubble-header'
+        );
+        for (const msg of msgOverlays) {
+            const closeBtn = msg.querySelector('button[data-control-name="overlay.close_conversation_window"], button[aria-label*="Close conversation" i], button[class*="close" i]');
+            if (closeBtn) {
+                clickNativeElement(closeBtn);
+            }
+        }
+    } catch(e) {}
+}
+
 function triggerLinkedInNativePlay(video) {
     try {
+        dismissLinkedInAiChatbotIfOpen();
         if (!video || !document.body.contains(video)) {
             video = getLinkedInVideo();
         }
@@ -6320,16 +6412,16 @@ function triggerLinkedInNativePlay(video) {
             video.play().catch(() => {});
         }
 
-        // Targeted play buttons - STRICT matching to never click Autoplay or other settings!
+        // Targeted play buttons - STRICT matching to never click Autoplay, Chat, or AI settings!
         const playButtonSelectors = [
             'button.classroom-player__play-button',
             'button[data-control-name="play_button"]',
             'button[data-control-name="play"]',
             'button.vjs-big-play-button',
-            'button[aria-label="Play" i]',
-            'button[aria-label="Play video" i]',
-            'button[aria-label="Resume" i]',
-            'button[aria-label="Resume video" i]',
+            '.classroom-player button[aria-label="Play" i]',
+            '.classroom-player button[aria-label="Play video" i]',
+            '.classroom-player button[aria-label="Resume" i]',
+            '.classroom-player button[aria-label="Resume video" i]',
             '.classroom-player__play-pause-btn[aria-label*="Play" i]',
             'button[data-control-name="resume_course"]',
             'button[data-control-name="start_course"]'
@@ -6338,6 +6430,7 @@ function triggerLinkedInNativePlay(video) {
         for (const sel of playButtonSelectors) {
             const btn = document.querySelector(sel);
             if (btn && btn.offsetParent !== null) {
+                if (isAiChatbotElement(btn)) continue;
                 const label = (btn.getAttribute('aria-label') || '').toLowerCase();
                 if (!label.includes('autoplay') && !label.includes('pause')) {
                     clickNativeElement(btn);
@@ -6359,6 +6452,7 @@ function triggerLinkedInNativePlay(video) {
 }
 
 async function ensureLinkedInVideoPlayerMounted(maxWaitMs = 12000) {
+    dismissLinkedInAiChatbotIfOpen();
     if (getLinkedInVideo()) return true;
 
     log("[LinkedIn] Video player not yet mounted. Checking for Course Overview Start/Resume buttons...");
@@ -6366,6 +6460,7 @@ async function ensureLinkedInVideoPlayerMounted(maxWaitMs = 12000) {
 
     while (Date.now() - startTime < maxWaitMs) {
         if (globalState.abortRequested) return false;
+        dismissLinkedInAiChatbotIfOpen();
 
         const video = getLinkedInVideo();
         if (video) {
@@ -6373,41 +6468,46 @@ async function ensureLinkedInVideoPlayerMounted(maxWaitMs = 12000) {
             return true;
         }
 
-        // 1. Look for and click Resume / Start Hero CTA buttons on Course Overview pages
+        // 1. Look for and click Resume / Start Hero CTA buttons on Course Overview pages (STRICT selectors)
         const startSelectors = [
             'button[data-control-name="resume_course"]',
             'button[data-control-name="start_course"]',
             'a[data-control-name="resume_course"]',
             'a[data-control-name="start_course"]',
-            '.course-hero button',
-            '.course-hero a',
-            '[class*="hero"] button[class*="cta" i]',
-            '[class*="hero"] a[class*="cta" i]',
-            'button[aria-label*="Resume" i]',
-            'button[aria-label*="Start" i]'
+            'button.course-hero__cta',
+            'a.course-hero__cta',
+            'button[aria-label="Resume course" i]',
+            'button[aria-label="Start course" i]',
+            'button[aria-label="Resume learning" i]',
+            'button[aria-label="Start learning" i]',
+            'a[aria-label="Resume course" i]',
+            'a[aria-label="Start course" i]'
         ];
 
         for (const sel of startSelectors) {
             const btn = document.querySelector(sel);
             if (btn && (btn.offsetParent !== null || btn.clientWidth > 0)) {
+                if (isAiChatbotElement(btn)) continue;
                 log(`[LinkedIn] Found hero action (${sel}). Clicking to launch course player...`);
                 clickNativeElement(btn);
                 await new Promise(r => setTimeout(r, 1200));
+                dismissLinkedInAiChatbotIfOpen();
                 if (getLinkedInVideo()) return true;
             }
         }
 
-        // 2. Search for buttons/links by inner text
+        // 2. Search for buttons/links by exact inner text (never match generic single words like 'start' or 'resume')
         const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'));
         for (const el of buttons) {
+            if (isAiChatbotElement(el)) continue;
             const text = (el.innerText || '').trim().toLowerCase();
             if (text === 'resume course' || text === 'start course' || 
                 text === 'resume learning' || text === 'start learning' ||
-                text === 'continue' || text === 'watch course' ||
-                text === 'resume' || text === 'start') {
+                text === 'watch course' || text === 'continue course') {
                 log(`[LinkedIn] Clicking "${text}" button to initialize course player...`);
                 clickNativeElement(el);
                 await new Promise(r => setTimeout(r, 1200));
+                dismissLinkedInAiChatbotIfOpen();
                 if (getLinkedInVideo()) return true;
             }
         }
@@ -6418,11 +6518,13 @@ async function ensureLinkedInVideoPlayerMounted(maxWaitMs = 12000) {
             '.classroom-toc-item a, [data-test-toc-item] a, [class*="toc-item"] a, .classroom-sidebar a[href*="/learning/"]'
         ));
         for (const link of tocLinks) {
+            if (isAiChatbotElement(link)) continue;
             const href = (link.getAttribute('href') || link.href || '').toLowerCase();
             if (href.includes('/learning/') && !href.includes('/paths/') && !href.includes('/career-hub')) {
                 log(`[LinkedIn] Clicking syllabus lesson to launch video player...`);
                 clickNativeElement(link);
                 await new Promise(r => setTimeout(r, 1200));
+                dismissLinkedInAiChatbotIfOpen();
                 if (getLinkedInVideo()) return true;
             }
         }
@@ -6430,6 +6532,7 @@ async function ensureLinkedInVideoPlayerMounted(maxWaitMs = 12000) {
         await new Promise(r => setTimeout(r, 400));
     }
 
+    dismissLinkedInAiChatbotIfOpen();
     return !!getLinkedInVideo();
 }
 
@@ -6437,6 +6540,7 @@ async function waitForLinkedInVideo(timeoutMs = 7000) {
     const startTime = Date.now();
     while (Date.now() - startTime < timeoutMs) {
         if (globalState.abortRequested) return null;
+        dismissLinkedInAiChatbotIfOpen();
         
         // If current page is a quiz, return early so quiz skipper handles it
         if (isLinkedInQuizPage()) {
@@ -6607,6 +6711,7 @@ async function refreshLinkedInVideo(video) {
     for (const sel of recoverySelectors) {
         const btn = document.querySelector(sel);
         if (btn && btn.offsetParent !== null) {
+            if (isAiChatbotElement(btn)) continue;
             const label = (btn.getAttribute('aria-label') || '').toLowerCase();
             if (label.includes('autoplay') || label.includes('pause')) continue;
             log(`[LinkedIn] Triggering player recovery control: ${sel}`);
@@ -6645,12 +6750,14 @@ async function refreshLinkedInVideo(video) {
 async function skipLinkedInQuizIfPresent() {
     if (!isLinkedInQuizPage()) return false;
 
+    dismissLinkedInAiChatbotIfOpen();
     log("[LinkedIn] ⏭️ Optional Quiz/Assessment detected. Automatically skipping...", "warning");
     showOnScreenHUD("⏭️ Skipping Optional Quiz...", "warning");
 
     // 1. Find and click Skip button if visible on screen
     const clickable = Array.from(document.querySelectorAll('button, a, [role="button"]'));
     for (const el of clickable) {
+        if (isAiChatbotElement(el)) continue;
         const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
         const aria = (el.getAttribute('aria-label') || '').toLowerCase();
         if (txt === 'skip' || txt === 'skip quiz' || txt === 'skip to next' || txt === 'skip assessment' ||
@@ -6675,6 +6782,7 @@ async function skipLinkedInQuizIfPresent() {
     for (const sel of nextSelectors) {
         const btn = document.querySelector(sel);
         if (btn && !btn.disabled && btn.offsetParent !== null) {
+            if (isAiChatbotElement(btn)) continue;
             log("[LinkedIn] Clicking next button to advance past quiz...");
             clickNativeElement(btn);
             await new Promise(r => setTimeout(r, 2000));
@@ -7104,6 +7212,7 @@ async function advanceToNextLinkedInVideo() {
     for (const sel of nextButtonSelectors) {
         const btn = document.querySelector(sel);
         if (btn && !btn.disabled && btn.offsetParent !== null) {
+            if (isAiChatbotElement(btn)) continue;
             log(`[LinkedIn] Triggering next video control...`);
             clickNativeElement(btn);
             return true;
@@ -7124,7 +7233,7 @@ async function advanceToNextLinkedInVideo() {
             targetItem = queue[0];
         }
 
-        if (targetItem) {
+        if (targetItem && !isAiChatbotElement(targetItem.linkElement)) {
             log(`[LinkedIn] Selecting next lesson from syllabus: ${targetItem.title}`);
             if (targetItem.linkElement) {
                 targetItem.linkElement.scrollIntoView({ behavior: 'smooth', block: 'center' });

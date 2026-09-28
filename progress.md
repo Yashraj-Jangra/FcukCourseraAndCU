@@ -2,6 +2,18 @@
 
 ## Session Summary (2026-09-28)
 
+- 🐛 **Fix Floating HUD Sticky Dragging & Eliminate Unintended AI Chatbot Opening (`content.js`)**:
+  - **HUD Sticky Cursor Fix (`content.js`)**:
+    - **Root Cause**: `setPointerCapture` was called on `#fcuk-floating-hud` but `pointerup` was listened on `#hudDragHeader`. Releasing the pointer fired `pointerup` on the capture target rather than the header, causing the header to miss the release event and leaving `isDragging` stuck on `true` forever.
+    - **Solution**: Refactored `initHudDragging()` to use window-level capture event listeners (`pointermove`, `pointerup`, `pointercancel`, and `blur`). Dragging only activates on primary left-click on the header, reliably updates clamped coordinates, and unconditionally detaches and cleans up upon pointer release anywhere on screen or on window blur.
+  - **AI Chatbot Opening Prevention (`content.js`)**:
+    - **Root Cause**: In `ensureLinkedInVideoPlayerMounted()`, broad hero selectors (`.course-hero button`, `button[aria-label*="Start" i]`, and single-word text matching `'start'` or `'resume'`) matched LinkedIn Learning's newly introduced AI Coach / AI Assistant widget (e.g. `"Start conversation with AI"`, `"Ask AI"`). When opening a worker tab, it inadvertently clicked the AI Coach CTA and opened the chatbot drawer.
+    - **Solution**:
+      1. Implemented `isAiChatbotElement(el)`: filters out any element or parent container matching AI/Coach/Chat/Messaging signatures (`ai-`, `coach`, `chatbot`, `assistant`, `learning-bot`, `msg-overlay-conversation-bubble`, `drawer`, etc.).
+      2. Implemented `dismissLinkedInAiChatbotIfOpen()`: automatically finds and clicks dismiss/close buttons on any AI coach drawer or messaging popups that appear.
+      3. Tightened `startSelectors` in `ensureLinkedInVideoPlayerMounted` to strict, unambiguous course action attributes (`data-control-name="resume_course"`, `data-control-name="start_course"`, `button.course-hero__cta`, `button[aria-label="Resume course" i]`), eliminating all loose partial matches.
+      4. Protected `triggerLinkedInNativePlay`, player recovery controls, quiz skippers, and lesson TOC progression from ever clicking AI elements.
+
 - ✨ **In-Page Persistent Floating HUD, Worker Tab Video Auto-Mounting & Resilient 16x Speed Enforcement (`content.js`, `background.js`, `popup.html`, `popup.js`)**:
   - **In-Page Persistent Floating HUD (`content.js`)**:
     - Built `#fcuk-floating-hud`: a sleek, glassmorphic floating control center injected directly into the LinkedIn page DOM so users never lose UI state when clicking away or closing the extension popup.

@@ -6017,6 +6017,57 @@ function createLinkedInFloatingHUD() {
                 background: rgba(239, 68, 68, 0.2);
                 border-color: rgba(239, 68, 68, 0.5);
             }
+            .hud-notice-banner {
+                display: none;
+                align-items: center;
+                gap: 6px;
+                padding: 6px 9px;
+                background: rgba(245, 158, 11, 0.14);
+                border: 1px solid rgba(245, 158, 11, 0.38);
+                border-radius: 6px;
+                font-size: 9.5px;
+                color: #fcd34d;
+                line-height: 1.35;
+            }
+            .hud-notice-icon {
+                flex-shrink: 0;
+                font-size: 11px;
+            }
+            .hud-notice-text {
+                flex: 1;
+                font-weight: 500;
+            }
+            .hud-notice-dismiss {
+                background: transparent;
+                border: none;
+                color: #fcd34d;
+                opacity: 0.7;
+                cursor: pointer;
+                font-size: 13px;
+                line-height: 1;
+                padding: 0 2px;
+            }
+            .hud-notice-dismiss:hover {
+                opacity: 1;
+                color: #ffffff;
+            }
+            .hud-smart-badge {
+                font-size: 8.5px;
+                font-weight: 700;
+                padding: 1px 5px;
+                border-radius: 3px;
+                background: rgba(16, 185, 129, 0.15);
+                border: 1px solid rgba(16, 185, 129, 0.35);
+                color: #34d399;
+                letter-spacing: 0.2px;
+                white-space: nowrap;
+                transition: all 0.2s ease;
+            }
+            .hud-smart-badge.throttled {
+                background: rgba(245, 158, 11, 0.22);
+                border-color: rgba(245, 158, 11, 0.45);
+                color: #fbbf24;
+            }
         </style>
 
         <!-- Header -->
@@ -6047,6 +6098,13 @@ function createLinkedInFloatingHUD() {
 
         <!-- Body -->
         <div class="hud-body">
+            <!-- Notice Banner (Smart Auto-Throttle) -->
+            <div class="hud-notice-banner" id="hudNoticeBanner">
+                <span class="hud-notice-icon">⚠️</span>
+                <span class="hud-notice-text" id="hudNoticeText"></span>
+                <button class="hud-notice-dismiss" id="hudNoticeDismiss" title="Dismiss">×</button>
+            </div>
+
             <!-- Progress Card -->
             <div class="hud-progress-card">
                 <div class="hud-progress-row">
@@ -6077,6 +6135,7 @@ function createLinkedInFloatingHUD() {
                         <button class="hud-pill" data-conc="4">4</button>
                         <button class="hud-pill" data-conc="5">5</button>
                     </div>
+                    <span class="hud-smart-badge" id="hudSmartBadge" title="Smart Parallel Tabs active: automatically throttles tabs if video buffering occurs">⚡ Smart</span>
                 </div>
 
                 <div style="display: flex; align-items: center; gap: 4px;">
@@ -6285,6 +6344,16 @@ function attachHudControls(hud) {
             });
         });
     }
+
+    // Dismiss Notice Banner
+    const noticeDismiss = hud.querySelector('#hudNoticeDismiss');
+    if (noticeDismiss) {
+        noticeDismiss.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const banner = hud.querySelector('#hudNoticeBanner');
+            if (banner) banner.style.display = 'none';
+        });
+    }
 }
 
 function renderFloatingHudState(state) {
@@ -6319,7 +6388,27 @@ function renderFloatingHudState(state) {
     if (progressVal) progressVal.innerText = `${pct}% (${completed}/${total})`;
     if (barFill) barFill.style.width = `${pct}%`;
     if (activeCount) activeCount.innerText = String(state.activeWorkerCount || 0);
-    if (pillStats) pillStats.innerText = `⚡ ${state.targetSpeed || 16}x • ${completed}/${total} (${pct}%)`;
+    if (pillStats) {
+        if (state.throttleNotice) {
+            pillStats.innerText = `⚠️ ${state.maxConcurrency || 1} tab${(state.maxConcurrency || 1) > 1 ? 's' : ''} (throttled) • ${completed}/${total}`;
+        } else {
+            pillStats.innerText = `⚡ ${state.targetSpeed || 16}x • ${completed}/${total} (${pct}%)`;
+        }
+    }
+
+    // Notice banner rendering
+    const noticeBanner = hud.querySelector('#hudNoticeBanner');
+    const noticeText = hud.querySelector('#hudNoticeText');
+    const smartBadge = hud.querySelector('#hudSmartBadge');
+
+    if (state.throttleNotice) {
+        if (noticeBanner) noticeBanner.style.display = 'flex';
+        if (noticeText) noticeText.innerText = state.throttleNotice;
+        if (smartBadge) smartBadge.classList.add('throttled');
+    } else {
+        if (noticeBanner) noticeBanner.style.display = 'none';
+        if (smartBadge) smartBadge.classList.remove('throttled');
+    }
 
     // Concurrency pills sync
     if (state.maxConcurrency) {
@@ -7222,6 +7311,18 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
                 // 5.0s stall: safe non-destructive video stream recovery
                 else if (stuckCount === 20) {
                     await refreshLinkedInVideo(video);
+                }
+                // 6.0s stall (stuckCount === 24): SMART PARALLEL TABS - Signal buffer pressure to auto-reduce tabs!
+                else if (stuckCount === 24) {
+                    if (isWorkerTab && courseId) {
+                        log("[LinkedIn] ⚠️ Heavy video buffering detected. Requesting smart orchestrator to auto-reduce active tabs...", "warning");
+                        showOnScreenHUD("⚠️ Buffering detected — auto-reducing tabs...", "warning");
+                        chrome.runtime.sendMessage({
+                            action: "path_worker_buffering_pressure",
+                            courseId: courseId,
+                            stuckSeconds: 6
+                        }).catch(() => {});
+                    }
                 }
                 // 8.0s stall: step down speed to 4x to alleviate MSE buffer throttling
                 else if (stuckCount === 32) {

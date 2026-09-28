@@ -33,7 +33,11 @@ let pathOrchestrator = {
     maxConcurrency: 3, // Default is 3
     targetSpeed: 16.0,
     activeWorkers: new Map(), // tabId -> courseId
-    overviewTabId: null
+    overviewTabId: null,
+    smartConcurrency: true, // Adaptive dynamic concurrency enabled
+    lastThrottleTime: 0,    // Cooldown timestamp between auto-throttles
+    throttleNotice: null,   // Active notice displayed in Floating HUD and Popup
+    throttleNoticeTimeout: null
 };
 
 function getSerializablePathState() {
@@ -46,7 +50,9 @@ function getSerializablePathState() {
         targetSpeed: pathOrchestrator.targetSpeed,
         activeWorkerCount: pathOrchestrator.activeWorkers.size,
         totalCourses: pathOrchestrator.courses.length,
-        completedCourses: pathOrchestrator.courses.filter(c => c.status === 'completed').length
+        completedCourses: pathOrchestrator.courses.filter(c => c.status === 'completed').length,
+        smartConcurrency: pathOrchestrator.smartConcurrency,
+        throttleNotice: pathOrchestrator.throttleNotice || null
     };
 }
 
@@ -438,6 +444,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Close ALL old worker tabs before initializing a new worker pool
         closeAllOldWorkerTabs(overviewTabId).then(() => {
+            if (pathOrchestrator.throttleNoticeTimeout) {
+                clearTimeout(pathOrchestrator.throttleNoticeTimeout);
+            }
             pathOrchestrator = {
                 isRunning: true,
                 pathTitle: request.pathTitle || "Learning Path",
@@ -446,7 +455,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 maxConcurrency: concurrency,
                 targetSpeed: speed,
                 activeWorkers: new Map(),
-                overviewTabId: overviewTabId
+                overviewTabId: overviewTabId,
+                smartConcurrency: true,
+                lastThrottleTime: 0,
+                throttleNotice: null,
+                throttleNoticeTimeout: null
             };
 
             savePathState();
@@ -466,6 +479,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const conc = Math.max(1, Math.min(5, parseInt(request.concurrency, 10) || 3));
         pathOrchestrator.maxConcurrency = conc;
         chrome.storage.local.set({ linkedinPathConcurrency: conc });
+        pathOrchestrator.throttleNotice = null;
+        if (pathOrchestrator.throttleNoticeTimeout) {
+            clearTimeout(pathOrchestrator.throttleNoticeTimeout);
+            pathOrchestrator.throttleNoticeTimeout = null;
+        }
 
         // If currently open workers exceed new concurrency, close excess worker tabs immediately!
         while (pathOrchestrator.activeWorkers.size > conc) {
@@ -506,6 +524,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === "stop_learning_path") {
         pathOrchestrator.isRunning = false;
+        pathOrchestrator.throttleNotice = null;
+        if (pathOrchestrator.throttleNoticeTimeout) {
+            clearTimeout(pathOrchestrator.throttleNoticeTimeout);
+            pathOrchestrator.throttleNoticeTimeout = null;
+        }
         // Close all active worker tabs and clean up
         closeAllOldWorkerTabs(pathOrchestrator.overviewTabId).then(() => {
             pathOrchestrator.courses.forEach(c => {
@@ -563,6 +586,109 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         dispatchNextPathWorkers();
 
         sendResponse({ status: "acknowledged" });
+        return true;
+    }
+
+    // 5. Smart Adaptive Concurrency (Buffer Pressure Auto-Throttle)
+    if (request.action === "path_worker_buffering_pressure") {
+        if (!pathOrchestrator.isRunning || !pathOrchestrator.smartConcurrency) {
+            sendResponse({ status: "ignored" });
+            return true;
+        }
+
+        const now = Date.now();
+        // 10-second cooldown to avoid cascading multiple reductions for the same network spike
+        if (now - pathOrchestrator.lastThrottleTime < 10000) {
+            sendResponse({ status: "cooldown" });
+            return true;
+        }
+
+        const courseId = request.courseId;
+        const workerTabId = (sender && sender.tab ? sender.tab.id : null) || request.tabId;
+        const currentConc = pathOrchestrator.maxConcurrency;
+
+        if (currentConc > 1) {
+            const newConc = currentConc - 1;
+            pathOrchestrator.maxConcurrency = newConc;
+            pathOrchestrator.lastThrottleTime = now;
+            chrome.storage.local.set({ linkedinPathConcurrency: newConc });
+
+            const course = pathOrchestrator.courses.find(c => c.id === courseId);
+            const courseTitle = course ? course.title : "worker tab";
+
+            // 1. Immediately close the buffering tab to relieve bandwidth
+            if (workerTabId) {
+                pathOrchestrator.activeWorkers.delete(workerTabId);
+                untrackWorkerTabId(workerTabId);
+                chrome.tabs.remove(workerTabId).catch(() => {});
+            }
+
+            // 2. Put this course back into queued status so it resumes cleanly later
+            if (course && course.status === 'running') {
+                course.status = 'queued';
+                course.tabId = null;
+                course.currentItem = 'Queued (Auto-throttled for buffer)';
+            }
+
+            // 3. Ensure active workers strictly respect the new lower concurrency
+            while (pathOrchestrator.activeWorkers.size > newConc) {
+                const [excessTabId, excessCourseId] = Array.from(pathOrchestrator.activeWorkers.entries()).pop();
+                pathOrchestrator.activeWorkers.delete(excessTabId);
+                untrackWorkerTabId(excessTabId);
+                chrome.tabs.remove(excessTabId).catch(() => {});
+                const c = pathOrchestrator.courses.find(item => item.id === excessCourseId);
+                if (c && c.status === 'running') {
+                    c.status = 'queued';
+                    c.tabId = null;
+                    c.currentItem = 'Queued (Auto-throttled)';
+                }
+            }
+
+            // 4. Mention in HUD & extension status
+            const noticeMsg = `⚠️ Heavy buffering in "${courseTitle}". Smart Throttled: reduced to ${newConc} active tab${newConc > 1 ? 's' : ''} & closed buffering tab.`;
+            pathOrchestrator.throttleNotice = noticeMsg;
+
+            if (pathOrchestrator.throttleNoticeTimeout) {
+                clearTimeout(pathOrchestrator.throttleNoticeTimeout);
+            }
+            pathOrchestrator.throttleNoticeTimeout = setTimeout(() => {
+                pathOrchestrator.throttleNotice = null;
+                savePathState();
+                broadcastPathProgress();
+            }, 18000);
+
+            savePathState();
+            broadcastPathProgress();
+            sendResponse({ status: "throttled", newConcurrency: newConc, closedTabId: workerTabId });
+        } else {
+            // Already down to 1 tab - cannot decrease tabs further; notify and step down speed to 4x to help HLS stream
+            pathOrchestrator.lastThrottleTime = now;
+            const course = pathOrchestrator.courses.find(c => c.id === courseId);
+            const courseTitle = course ? course.title : "worker tab";
+            pathOrchestrator.throttleNotice = `⚠️ Buffering in "${courseTitle}". Single-tab mode active; relieving video speed.`;
+
+            if (pathOrchestrator.targetSpeed > 4.0) {
+                pathOrchestrator.targetSpeed = 4.0;
+                chrome.storage.local.set({ linkedinPathSpeed: 4.0 });
+                for (const [tabId] of pathOrchestrator.activeWorkers) {
+                    injectMainWorldAntiPauseAndSpeed(tabId, 4.0);
+                    sendTabMessageWithAutoInject(tabId, { action: "set_video_speed", speed: 4.0 }, () => {});
+                }
+            }
+
+            if (pathOrchestrator.throttleNoticeTimeout) {
+                clearTimeout(pathOrchestrator.throttleNoticeTimeout);
+            }
+            pathOrchestrator.throttleNoticeTimeout = setTimeout(() => {
+                pathOrchestrator.throttleNotice = null;
+                savePathState();
+                broadcastPathProgress();
+            }, 14000);
+
+            savePathState();
+            broadcastPathProgress();
+            sendResponse({ status: "single_tab_speed_adjusted" });
+        }
         return true;
     }
 });

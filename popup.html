@@ -303,6 +303,30 @@
       border-color: #0284c7;
       color: #ffffff;
     }
+    .smart-tab-badge {
+      font-size: 8.5px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #34d399;
+      letter-spacing: 0.2px;
+      white-space: nowrap;
+    }
+    .popup-notice-banner {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 9px;
+      background: rgba(245, 158, 11, 0.14);
+      border: 1px solid rgba(245, 158, 11, 0.38);
+      border-radius: var(--radius-sm);
+      color: #fcd34d;
+      font-size: 10px;
+      line-height: 1.35;
+      margin-bottom: 8px;
+    }
 
     /* Worker Progress Tray */
     .worker-tray {
@@ -735,7 +759,10 @@
     <div id="linkedinPathControls" style="display: none;">
       <!-- Concurrency Selector -->
       <div class="concurrency-box">
-        <span class="concurrency-label">Parallel Tabs</span>
+        <div style="display: flex; align-items: center; gap: 5px;">
+          <span class="concurrency-label">Parallel Tabs</span>
+          <span class="smart-tab-badge" title="Smart Parallel Tabs active: automatically throttles active tabs if buffering occurs">⚡ Smart</span>
+        </div>
         <div id="concurrencyPills" class="concurrency-pills">
           <button class="concurrency-pill" data-concurrency="1">1</button>
           <button class="concurrency-pill" data-concurrency="2">2</button>
@@ -743,6 +770,12 @@
           <button class="concurrency-pill" data-concurrency="4">4</button>
           <button class="concurrency-pill" data-concurrency="5">5</button>
         </div>
+      </div>
+
+      <!-- Notice Banner (Smart Auto-Throttle) -->
+      <div id="popupNoticeBanner" class="popup-notice-banner">
+        <span style="font-size: 11px; flex-shrink: 0;">⚠️</span>
+        <span id="popupNoticeText" style="flex: 1; font-weight: 500;"></span>
       </div>
 
       <button id="linkedinStartPathBtn" class="btn-hero" style="background: #0284c7;">

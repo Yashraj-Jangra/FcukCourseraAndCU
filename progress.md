@@ -2,6 +2,18 @@
 
 ## Session Summary (2026-09-28)
 
+- ✨ **Smart Parallel Tabs: Adaptive Buffer-Pressure Throttling, Tab Teardown & HUD Alert (`background.js`, `content.js`, `popup.html`, `popup.js`)**:
+  - **Buffer Pressure Watchdog (`content.js`)**:
+    - In `playLinkedInVideoToCompletion`: when a video in a worker tab experiences continuous buffering/stalling for 6+ seconds (`stuckCount === 24`), it sends a `path_worker_buffering_pressure` signal to the background orchestrator.
+  - **Dynamic Concurrency Decrement & Stalled Tab Closure (`background.js`)**:
+    - When buffering pressure is received, `pathOrchestrator` automatically decrements `maxConcurrency` by 1 (with a 10s cooldown to avoid over-throttling on network spikes).
+    - Immediately terminates the buffering worker tab (`chrome.tabs.remove(tabId)`) to instantaneously alleviate bandwidth and CDN congestion.
+    - Restores the throttled course back to `queued` status (`Queued (Auto-throttled for buffer)`), guaranteeing zero loss of progression.
+    - When already at single-tab concurrency (1 tab), automatically steps down playback speed to 4x to restore fluid streaming.
+  - **HUD Alert & Real-time Indicator (`content.js`, `popup.html`, `popup.js`)**:
+    - Built glassmorphic `#hudNoticeBanner` and `#popupNoticeBanner` notifying the user of auto-throttling actions (e.g. `"⚠️ Heavy buffering in '<Course>'. Smart Throttled: reduced to 2 active tabs & closed buffering tab."`) with a manual dismiss option.
+    - Added dynamic `⚡ Smart` badge in the Floating HUD and popup concurrency rows, and automatically updated active pills to reflect the newly decreased tab count.
+
 - 🐛 **Add Dedicated Drag Handle to Floating HUD & Eliminate Sticky Hover Drag (`content.js`)**:
   - **Root Cause**: The entire HUD header was styled with `cursor: grab` and listened for `pointerdown` across all non-button areas without requiring a movement threshold or verifying that a mouse button was actively held down during subsequent cursor movements. As a result, hovering or clicking on the header could leave the HUD in a persistent drag state stuck to the cursor.
   - **Dedicated Drag Handle (`#hudDragHandle`)**:

@@ -535,6 +535,30 @@ function renderPathWorkerState(state) {
         const pathSpeedSelect = document.getElementById('linkedinPathSpeedSelect');
         if (pathSpeedSelect) pathSpeedSelect.value = String(state.targetSpeed);
     }
+
+    // Sync throttle notice banner in popup
+    const popupNoticeBanner = document.getElementById('popupNoticeBanner');
+    const popupNoticeText = document.getElementById('popupNoticeText');
+    if (popupNoticeBanner && popupNoticeText) {
+        if (state.throttleNotice) {
+            popupNoticeBanner.style.display = 'flex';
+            popupNoticeText.innerText = state.throttleNotice;
+        } else {
+            popupNoticeBanner.style.display = 'none';
+        }
+    }
+
+    // Sync active concurrency pill with state
+    if (state.maxConcurrency) {
+        const pills = document.querySelectorAll('.concurrency-pill');
+        pills.forEach(p => {
+            if (parseInt(p.getAttribute('data-concurrency'), 10) === state.maxConcurrency) {
+                p.classList.add('active');
+            } else {
+                p.classList.remove('active');
+            }
+        });
+    }
 }
 
 // Concurrency Selector (Pills 1 - 5, default 3)

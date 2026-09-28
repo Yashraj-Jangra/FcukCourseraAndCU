@@ -6628,6 +6628,11 @@ async function ensureLinkedInVideoPlayerMounted(maxWaitMs = 12000) {
     while (Date.now() - startTime < maxWaitMs) {
         if (globalState.abortRequested) return false;
         dismissLinkedInAiChatbotIfOpen();
+        dismissLinkedInModalsIfPresent();
+
+        if (await checkAndHandleLinkedInErrors()) {
+            return false;
+        }
 
         const video = getLinkedInVideo();
         if (video) {
@@ -6708,6 +6713,11 @@ async function waitForLinkedInVideo(timeoutMs = 7000) {
     while (Date.now() - startTime < timeoutMs) {
         if (globalState.abortRequested) return null;
         dismissLinkedInAiChatbotIfOpen();
+        dismissLinkedInModalsIfPresent();
+
+        if (await checkAndHandleLinkedInErrors()) {
+            return null;
+        }
         
         // If current page is a quiz, return early so quiz skipper handles it
         if (isLinkedInQuizPage()) {
@@ -6843,14 +6853,238 @@ function isCurrentLinkedInLessonCompleted() {
     return false;
 }
 
+// Dismiss optional feedback, survey, or rating dialogs
+function dismissLinkedInModalsIfPresent() {
+    try {
+        const dismissButtons = document.querySelectorAll(
+            'button[aria-label*="Dismiss" i], ' +
+            'button[aria-label*="Close" i], ' +
+            'button[data-control-name*="close" i], ' +
+            '.artdeco-modal__dismiss, ' +
+            '[data-test-modal-close-btn]'
+        );
+        for (const btn of dismissButtons) {
+            if (isAiChatbotElement(btn)) continue;
+            if (btn.closest('.artdeco-modal, [role="dialog"], .modal-overlay, [class*="feedback-modal"]')) {
+                btn.click();
+            }
+        }
+    } catch(e) {}
+}
+
+// Error recovery for transient outages / "It’s not you. It’s us. Give it another try, please."
+async function checkAndHandleLinkedInErrors() {
+    try {
+        const errorSignatures = [
+            "it's not you. it's us",
+            "it’s not you. it’s us",
+            "give it another try",
+            "something went wrong",
+            "unable to load",
+            "failed to load",
+            "having trouble loading",
+            "video unavailable",
+            "error playing video",
+            "playback error"
+        ];
+
+        let errorFound = false;
+
+        // 1. Check for error banners, overlays, and error containers
+        const errorContainers = document.querySelectorAll(
+            '.error-container, [class*="error-container"], [class*="error-message"], ' +
+            '.vjs-error-display, [data-test-error], .artdeco-empty-state, [class*="empty-state"]'
+        );
+        for (const ec of errorContainers) {
+            const text = (ec.innerText || '').toLowerCase();
+            if (errorSignatures.some(sig => text.includes(sig))) {
+                errorFound = true;
+                break;
+            }
+        }
+
+        if (!errorFound) {
+            const bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+            if (bodyText.includes("it's not you. it's us") || bodyText.includes("it’s not you. it’s us")) {
+                errorFound = true;
+            } else if (bodyText.includes("unable to load") || bodyText.includes("something went wrong")) {
+                const retryBtn = document.querySelector('button[aria-label*="retry" i], button[aria-label*="try again" i], .vjs-error-display');
+                if (retryBtn) errorFound = true;
+            }
+        }
+
+        // Check native HTMLMediaElement video error
+        const vid = getLinkedInVideo();
+        if (vid && vid.error) {
+            errorFound = true;
+        }
+
+        if (errorFound) {
+            log("[LinkedIn Auto-Recovery] ⚠️ Transient LinkedIn error detected ('It’s not you. It’s us' / stream glitch). Recovering...", "warning");
+            showOnScreenHUD("⚠️ LinkedIn error detected — auto-recovering...", "warning");
+
+            // Step 1: Look for "Give it another try" / "Try again" / "Retry" action button
+            const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]')).filter(b => {
+                if (isAiChatbotElement(b)) return false;
+                const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                return txt.includes('try again') || txt.includes('give it another try') ||
+                       txt.includes('retry') || txt.includes('reload') ||
+                       aria.includes('try again') || aria.includes('give it another try') || aria.includes('retry');
+            });
+
+            if (buttons.length > 0) {
+                log("[LinkedIn Auto-Recovery] Clicking 'Give it another try' / 'Retry' button...");
+                clickNativeElement(buttons[0]);
+                await new Promise(r => setTimeout(r, 2000));
+                const updatedBody = (document.body ? document.body.innerText : '').toLowerCase();
+                if (!updatedBody.includes("it's not you. it's us") && !updatedBody.includes("it’s not you. it’s us")) {
+                    log("[LinkedIn Auto-Recovery] ✓ Stream recovered via retry action.", "success");
+                    return true;
+                }
+            }
+
+            // Step 2: Graceful page reload with attempt guardrail (up to 3 reloads per URL)
+            const reloadKey = `__fcuk_err_reload_${window.location.pathname}`;
+            let reloadCount = parseInt(sessionStorage.getItem(reloadKey) || '0', 10);
+            if (reloadCount < 3) {
+                sessionStorage.setItem(reloadKey, String(reloadCount + 1));
+                log(`[LinkedIn Auto-Recovery] Reloading page (attempt ${reloadCount + 1}/3) to clear glitch...`, "warning");
+                showOnScreenHUD(`🔄 Reloading to clear error (${reloadCount + 1}/3)...`, "error");
+                await new Promise(r => setTimeout(r, 1200));
+                window.location.reload();
+                return true;
+            } else {
+                // Exceeded 3 reloads on the same URL: clear counter and advance to next lesson
+                sessionStorage.removeItem(reloadKey);
+                log("[LinkedIn Auto-Recovery] Max reload attempts reached. Skipping stuck lesson...", "error");
+                showOnScreenHUD("⏭️ Skipping error lesson...", "warning");
+                await advanceToNextLinkedInVideo();
+                return true;
+            }
+        }
+    } catch(e) {
+        console.warn("[FcukCoursera] Error handler notice:", e);
+    }
+    return false;
+}
+
+// Automatically enforce lowest video quality (e.g. 360p) to conserve bandwidth & avoid buffering
+let lastQualitySetUrl = "";
+async function setLowestLinkedInVideoQuality() {
+    if (lastQualitySetUrl === window.location.pathname) return;
+    try {
+        const qualitySelectors = [
+            'button[aria-label*="Quality" i]',
+            'button[aria-label*="quality" i]',
+            'button[data-control-name*="quality" i]',
+            'button.vjs-quality-selector',
+            'button[aria-label*="Settings" i]',
+            'button[aria-label*="settings" i]',
+            'button[data-control-name*="setting" i]',
+            '.classroom-player__controls [data-test-icon*="setting" i]'
+        ];
+
+        let settingsBtn = null;
+        for (const sel of qualitySelectors) {
+            const el = document.querySelector(sel);
+            if (el && el.offsetParent !== null && !isAiChatbotElement(el)) {
+                const btn = el.tagName === 'BUTTON' ? el : el.closest('button');
+                if (btn) {
+                    const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                    if (label.includes('play') || label.includes('pause') || label.includes('next') || label.includes('prev')) continue;
+                    settingsBtn = btn;
+                    break;
+                }
+            }
+        }
+
+        if (!settingsBtn) {
+            const playerControls = document.querySelector('.classroom-player__controls, .video-player__controls');
+            if (playerControls) {
+                const btns = playerControls.querySelectorAll('button');
+                for (const b of btns) {
+                    const label = (b.getAttribute('aria-label') || b.title || '').toLowerCase();
+                    if (label.includes('quality') || label.includes('setting') || label.includes('gear')) {
+                        settingsBtn = b;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (settingsBtn) {
+            clickNativeElement(settingsBtn);
+            await new Promise(r => setTimeout(r, 350));
+
+            // Check if quality submenu needs to be clicked (e.g. inside Settings menu)
+            const qualitySubmenu = Array.from(document.querySelectorAll('[role="menuitem"], button, .menu-item')).find(item => {
+                const txt = (item.innerText || item.textContent || '').toLowerCase();
+                return txt.includes('quality') || txt.includes('resolution');
+            });
+            if (qualitySubmenu && !qualitySubmenu.getAttribute('aria-checked')) {
+                clickNativeElement(qualitySubmenu);
+                await new Promise(r => setTimeout(r, 250));
+            }
+
+            // Find all resolution options (e.g. 1080p, 720p, 540p, 360p)
+            const options = Array.from(document.querySelectorAll('[role="menuitemradio"], [role="menuitem"], .vjs-menu-item, li, button')).filter(el => {
+                const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+                return /\b\d{3,4}p\b/.test(txt) || txt.includes('360') || txt.includes('480');
+            });
+
+            if (options.length > 0) {
+                let lowestOption = null;
+                let minRes = Infinity;
+
+                for (const opt of options) {
+                    const txt = (opt.innerText || opt.textContent || '').trim();
+                    const match = txt.match(/(\d{3,4})p/i);
+                    if (match) {
+                        const res = parseInt(match[1], 10);
+                        if (res < minRes) {
+                            minRes = res;
+                            lowestOption = opt;
+                        }
+                    } else if (txt.toLowerCase().includes('360')) {
+                        minRes = 360;
+                        lowestOption = opt;
+                        break;
+                    }
+                }
+
+                if (lowestOption) {
+                    log(`[LinkedIn] 📉 Setting lowest video quality: ${lowestOption.innerText.trim()} (${minRes}p) to minimize bandwidth.`, "info");
+                    clickNativeElement(lowestOption);
+                    lastQualitySetUrl = window.location.pathname;
+                    await new Promise(r => setTimeout(r, 200));
+                }
+            }
+
+            // Close settings menu if still open
+            if (document.querySelector('[role="menu"], .vjs-menu.vjs-lock-showing')) {
+                clickNativeElement(settingsBtn);
+            }
+        }
+    } catch(e) {
+        console.log("[FcukCoursera] Video quality setting notice:", e);
+    }
+}
+
 async function refreshLinkedInVideo(video) {
     if (!video) return;
+
+    // Check for errors first
+    if (await checkAndHandleLinkedInErrors()) return;
 
     // If lesson already completed while buffering, advance
     if (isCurrentLinkedInLessonCompleted()) return;
 
     log("[LinkedIn] 🔄 Video stuck/buffering! Recovering video stream...", "warning");
     showOnScreenHUD("🔄 Video stuck — Recovering stream...", "warning");
+
+    // Re-assert lowest quality
+    setLowestLinkedInVideoQuality().catch(() => {});
 
     // 1. Ensure muted state to satisfy browser Autoplay policies
     try {
@@ -7102,6 +7336,9 @@ function scanLinkedInTOC() {
 }
 
 async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
+    dismissLinkedInModalsIfPresent();
+    if (await checkAndHandleLinkedInErrors()) return false;
+
     // 0. Check if current page is an optional quiz/assessment and skip it
     if (await skipLinkedInQuizIfPresent()) {
         return true;
@@ -7115,11 +7352,17 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
 
     const video = await waitForLinkedInVideo(12000);
     if (!video) {
+        if (await checkAndHandleLinkedInErrors()) {
+            return false;
+        }
         if (await skipLinkedInQuizIfPresent()) {
             return true;
         }
         throw new Error("Could not find active video player on page.");
     }
+
+    // Enforce lowest video quality to conserve bandwidth & avoid buffering stalls
+    setLowestLinkedInVideoQuality().catch(() => {});
 
     // Proactively request background to inject main-world anti-pause and speed overrides
     chrome.runtime.sendMessage({
@@ -7252,6 +7495,16 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
                 cleanup();
                 stopLinkedInVideoPlayback();
                 log("[LinkedIn] Playback stopped by user.");
+                resolve(false);
+                return;
+            }
+
+            // Dismiss feedback/survey modals if they pop up
+            dismissLinkedInModalsIfPresent();
+
+            // Check for transient player/outage errors
+            if (await checkAndHandleLinkedInErrors()) {
+                cleanup();
                 resolve(false);
                 return;
             }
@@ -7497,6 +7750,15 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
         while (!globalState.abortRequested && loopSafety < MAX_VIDEOS) {
             loopSafety++;
 
+            // Dismiss feedback/survey modals
+            dismissLinkedInModalsIfPresent();
+
+            // Auto-recover from transient errors before attempting lesson
+            if (await checkAndHandleLinkedInErrors()) {
+                await new Promise(r => setTimeout(r, 1500));
+                continue;
+            }
+
             // 1. Skip quiz / assessment if current screen is a quiz
             const skippedQuiz = await skipLinkedInQuizIfPresent();
             if (skippedQuiz) {
@@ -7707,6 +7969,31 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
                 speed: data.linkedinTargetSpeed || 16.0 
             });
         }
+
+        // 4. Check if this tab is an active LinkedIn Learning Path Worker tab (after page reload or error recovery)
+        try {
+            const workerResp = await chrome.runtime.sendMessage({ action: "get_my_worker_course" });
+            if (workerResp && workerResp.isWorker && workerResp.course) {
+                log(`[Worker Auto-Resume] Detected active worker assignment for course: "${workerResp.course.title}". Resuming execution...`);
+                globalState.isRunning = true;
+                globalState.currentAction = "linkedin_video";
+
+                if (document.readyState !== 'complete') {
+                    await new Promise(r => window.addEventListener('load', r, { once: true }));
+                }
+                await new Promise(r => setTimeout(r, 600));
+
+                dismissLinkedInModalsIfPresent();
+                await skipLinkedInQuizIfPresent();
+
+                await startLinkedInCourseCompletionProcess({
+                    speed: workerResp.targetSpeed || 16.0,
+                    isWorkerTab: true,
+                    courseId: workerResp.course.id
+                });
+                return;
+            }
+        } catch(e) {}
     } catch(e) {
         console.log("Notice in queue auto-resume:", e);
     }

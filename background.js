@@ -343,7 +343,7 @@ function injectMainWorldAntiPauseAndSpeed(targetTabId, speed = 16.0) {
                     }
                 }
 
-                // 7. Helper to enforce high-speed playback, mute, and unpause on video elements
+                // 7. Helper to enforce high-speed playback, mute, unpause, and lowest quality on video elements
                 const enforceOnVideo = (v) => {
                     if (!v || !window.__fcukLinkedInSpeedActive) return;
                     try {
@@ -357,6 +357,20 @@ function injectMainWorldAntiPauseAndSpeed(targetTabId, speed = 16.0) {
                         }
                         if (v.paused && !v.ended && v.readyState >= 2) {
                             v.play().catch(() => {});
+                        }
+
+                        // Enforce lowest quality level on HLS.js or Video.js instances if present
+                        if (v.hls && v.hls.levels && v.hls.levels.length > 0) {
+                            v.hls.currentLevel = 0;
+                            v.hls.autoLevelCapping = 0;
+                        }
+                        if (v.player && typeof v.player.qualityLevels === 'function') {
+                            const ql = v.player.qualityLevels();
+                            if (ql && ql.length > 0) {
+                                for (let i = 0; i < ql.length; i++) {
+                                    ql[i].enabled = (i === 0);
+                                }
+                            }
                         }
                     } catch(e) {}
                 };
@@ -570,6 +584,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }).catch(() => {});
         }
         sendResponse({ status: "reset" });
+        return true;
+    }
+
+    if (request.action === "get_my_worker_course") {
+        const senderTabId = sender && sender.tab ? sender.tab.id : null;
+        if (senderTabId && pathOrchestrator.isRunning && pathOrchestrator.activeWorkers.has(senderTabId)) {
+            const courseId = pathOrchestrator.activeWorkers.get(senderTabId);
+            const course = pathOrchestrator.courses.find(c => c.id === courseId);
+            sendResponse({ isWorker: true, course: course, targetSpeed: pathOrchestrator.targetSpeed });
+        } else {
+            sendResponse({ isWorker: false });
+        }
         return true;
     }
 
@@ -892,6 +918,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
     // 2. LinkedIn Learning Worker Tab initialization
     if (pathOrchestrator.isRunning && pathOrchestrator.activeWorkers.has(tabId)) {
+        // If tab is reloading, clear initialized flag so it re-arms cleanly on complete
+        if (changeInfo.status === 'loading') {
+            initializedWorkerTabIds.delete(tabId);
+            return;
+        }
+
         if (changeInfo.status === 'complete' || changeInfo.url) {
             const courseId = pathOrchestrator.activeWorkers.get(tabId);
             const course = pathOrchestrator.courses.find(c => c.id === courseId);

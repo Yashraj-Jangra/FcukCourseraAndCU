@@ -453,3 +453,35 @@
 ### What's Planned Next / Future Considerations:
 - Test live across a broad variety of Coursera course formats (e.g. specialized peer-review assignments).
 - Add optional user preference in popup to manually pick a preferred Gemini model or custom temperature.
+
+---
+
+## Session Summary (2026-09-29)
+
+### What Work Has Been Done:
+- 🛡️ **Transient Error Auto-Recovery ("It's not you. It's us. Give it another try, please.")**:
+  - Implemented `checkAndHandleLinkedInErrors` in `content.js` to detect LinkedIn Learning server error pages, empty states, and media errors.
+  - Automatically clicks "Give it another try" / "Retry" action buttons, or triggers graceful page reloads with a 3-attempt guardrail in `sessionStorage` before skipping permanently stuck lessons.
+  - Integrated error checks into `ensureLinkedInVideoPlayerMounted`, `waitForLinkedInVideo`, `playLinkedInVideoToCompletion` (entry and interval watchdog), and `startLinkedInCourseCompletionProcess`.
+- 📉 **Lowest Video Quality Enforcement (360p)**:
+  - Added `setLowestLinkedInVideoQuality` in `content.js` to open player settings, locate available resolutions (`1080p`, `720p`, `540p`, `360p`), and select the lowest option.
+  - Added HLS and Video.js quality level clamping (`v.hls.currentLevel = 0`, `v.player.qualityLevels()[0].enabled = true`) inside `injectMainWorldAntiPauseAndSpeed` in `background.js` to minimize bandwidth and eliminate MSE buffer stalls.
+- 🔄 **Worker Tab Reload Re-Arming & Auto-Resume**:
+  - In `background.js`, updated `chrome.tabs.onUpdated` to clear `initializedWorkerTabIds.delete(tabId)` on `changeInfo.status === 'loading'`, allowing reloaded worker tabs to re-arm cleanly.
+  - Added `get_my_worker_course` handler in `background.js` so worker tabs can query their assigned course on startup.
+  - Added worker auto-resume logic at the bottom of `content.js` so reloaded tabs immediately resume execution without getting stranded.
+- 🪟 **Floating On-Screen HUD (`#fcuk-linkedin-floating-hud`) & Drag Handle**:
+  - Added floating status HUD for LinkedIn Learning path progress with dedicated drag handle (`#fcuk-hud-drag-handle`) to prevent sticking to the cursor on hover.
+  - Multi-tab state synchronisation via `chrome.storage.onChanged`.
+- ⚡ **Smart Parallel Tabs with Buffer Backpressure**:
+  - Monitored tabs signal MSE buffer stalls; orchestrator in `background.js` automatically steps down worker concurrency to prevent browser freezing.
+- 📱 **Background / Unfocused Tab Playback**:
+  - Bypassed Chromium Autoplay policy by forcing audio muting and spoofing `document.visibilityState` / focus events in the MAIN execution world.
+- 📝 **Created Root `todo.md`**:
+  - Created persistent project task tracker and architecture overview at root level for seamless continuity in future agent (`.agents`) sessions.
+
+### What's Planned Next / Future Considerations:
+- Test parallel worker execution across multiple live courses in complex LinkedIn Learning Paths.
+- Add optional user preference toggle in popup for manual video quality preference (360p vs auto).
+- Add automated certificate detection and downloading upon path completion.
+

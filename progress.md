@@ -2,6 +2,18 @@
 
 ## Session Summary (2026-09-28)
 
+- ⚡ **Strict Concurrency Enforcement & Auto-Closing of Old Worker Tabs (`background.js`, `content.js`)**:
+  - **Persistent Worker Tab Registry (`background.js`)**:
+    - Implemented `trackWorkerTabId`, `untrackWorkerTabId`, and `closeAllOldWorkerTabs` backed by `linkedinWorkerTabIds` in `chrome.storage.local`.
+    - Every newly spawned worker tab is immediately registered in storage, and untracked upon completion or closure.
+  - **Purge Old Tabs on Launch & Stop (`background.js`)**:
+    - When launching a learning path (`start_learning_path`) or stopping (`stop_learning_path`), `closeAllOldWorkerTabs(overviewTabId)` runs first, immediately closing all stale/leftover worker tabs from prior runs so old tabs never accumulate.
+  - **Strict Concurrency Cap & Excess Pruning (`background.js`)**:
+    - In `dispatchNextPathWorkers()`: audits active tabs against `chrome.tabs.get`, removing dead entries and strictly enforcing that running tabs never exceed `maxConcurrency` (e.g. 3).
+    - In `set_path_concurrency`: when a user reduces concurrency (e.g. from 5 to 3), the orchestrator immediately closes excess worker tabs (`chrome.tabs.remove(excessTabId)`), untracks them, and returns their courses to `queued` status.
+  - **Worker Exit Failsafe (`content.js`)**:
+    - Added an automatic completion handshake in the `finally` block of `startLinkedInCourseCompletionProcess` to ensure finished worker tabs signal `path_worker_course_completed`, guaranteeing tabs are closed cleanly by the background orchestrator.
+
 - 🐛 **Fix Floating HUD Sticky Dragging & Eliminate Unintended AI Chatbot Opening (`content.js`)**:
   - **HUD Sticky Cursor Fix (`content.js`)**:
     - **Root Cause**: `setPointerCapture` was called on `#fcuk-floating-hud` but `pointerup` was listened on `#hudDragHeader`. Releasing the pointer fired `pointerup` on the capture target rather than the header, causing the header to miss the release event and leaving `isDragging` stuck on `true` forever.

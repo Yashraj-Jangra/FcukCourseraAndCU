@@ -229,9 +229,85 @@ function injectMainWorldAntiPauseAndSpeed(targetTabId, speed = 16.0) {
     });
 }
 
-// Dispatcher: Opens up to maxConcurrency worker tabs in background
+// Worker Tab Lifecycle & Persistence Tracker
+async function trackWorkerTabId(tabId) {
+    if (!tabId) return;
+    try {
+        const data = await chrome.storage.local.get(['linkedinWorkerTabIds']);
+        const ids = new Set(data.linkedinWorkerTabIds || []);
+        ids.add(tabId);
+        await chrome.storage.local.set({ linkedinWorkerTabIds: Array.from(ids) });
+    } catch(e) {}
+}
+
+async function untrackWorkerTabId(tabId) {
+    if (!tabId) return;
+    try {
+        const data = await chrome.storage.local.get(['linkedinWorkerTabIds']);
+        const ids = new Set(data.linkedinWorkerTabIds || []);
+        ids.delete(tabId);
+        await chrome.storage.local.set({ linkedinWorkerTabIds: Array.from(ids) });
+    } catch(e) {}
+}
+
+async function closeAllOldWorkerTabs(excludeTabId = null) {
+    try {
+        // 1. Close any tabs saved from previous sessions/runs in chrome.storage.local
+        const data = await chrome.storage.local.get(['linkedinWorkerTabIds']);
+        const storedIds = data.linkedinWorkerTabIds || [];
+        for (const tid of storedIds) {
+            if (tid && tid !== excludeTabId) {
+                chrome.tabs.remove(tid).catch(() => {});
+            }
+        }
+        await chrome.storage.local.set({ linkedinWorkerTabIds: [] });
+    } catch(e) {}
+
+    // 2. Close any currently active workers in memory
+    if (pathOrchestrator.activeWorkers && pathOrchestrator.activeWorkers.size > 0) {
+        for (const [tid] of pathOrchestrator.activeWorkers) {
+            if (tid && tid !== excludeTabId) {
+                chrome.tabs.remove(tid).catch(() => {});
+            }
+        }
+        pathOrchestrator.activeWorkers.clear();
+    }
+}
+
+// Dispatcher: Opens up to maxConcurrency worker tabs in background (STRICT limit)
 async function dispatchNextPathWorkers() {
     if (!pathOrchestrator.isRunning) return;
+
+    // 1. Audit active workers: Remove any tabs that no longer exist in Chrome
+    for (const [tabId, courseId] of Array.from(pathOrchestrator.activeWorkers.entries())) {
+        try {
+            await chrome.tabs.get(tabId);
+        } catch (e) {
+            // Tab was closed by user or crashed
+            pathOrchestrator.activeWorkers.delete(tabId);
+            untrackWorkerTabId(tabId);
+            const course = pathOrchestrator.courses.find(c => c.id === courseId);
+            if (course && course.status === 'running') {
+                course.status = 'queued';
+                course.tabId = null;
+                course.currentItem = 'Queued';
+            }
+        }
+    }
+
+    // 2. Strict concurrency clamp: If active count exceeds maxConcurrency, close excess tabs immediately
+    while (pathOrchestrator.activeWorkers.size > pathOrchestrator.maxConcurrency) {
+        const [excessTabId, courseId] = Array.from(pathOrchestrator.activeWorkers.entries()).pop();
+        pathOrchestrator.activeWorkers.delete(excessTabId);
+        untrackWorkerTabId(excessTabId);
+        chrome.tabs.remove(excessTabId).catch(() => {});
+        const course = pathOrchestrator.courses.find(c => c.id === courseId);
+        if (course && course.status === 'running') {
+            course.status = 'queued';
+            course.tabId = null;
+            course.currentItem = 'Queued';
+        }
+    }
 
     const runningCount = pathOrchestrator.activeWorkers.size;
     const availableSlots = pathOrchestrator.maxConcurrency - runningCount;
@@ -263,6 +339,7 @@ async function dispatchNextPathWorkers() {
             const tab = await chrome.tabs.create({ url: course.url, active: false });
             course.tabId = tab.id;
             pathOrchestrator.activeWorkers.set(tab.id, course.id);
+            trackWorkerTabId(tab.id);
 
             // Prevent tab from being discarded by Chrome
             await chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {});
@@ -357,20 +434,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const concurrency = Math.max(1, Math.min(5, parseInt(request.maxConcurrency, 10) || pathOrchestrator.maxConcurrency || 3));
         const speed = parseFloat(request.speed) || 16.0;
+        const overviewTabId = (sender && sender.tab ? sender.tab.id : null) || request.overviewTabId || null;
 
-        pathOrchestrator = {
-            isRunning: true,
-            pathTitle: request.pathTitle || "Learning Path",
-            pathUrl: request.pathUrl || "",
-            courses: courses,
-            maxConcurrency: concurrency,
-            targetSpeed: speed,
-            activeWorkers: new Map(),
-            overviewTabId: (sender && sender.tab ? sender.tab.id : null) || request.overviewTabId || null
-        };
+        // Close ALL old worker tabs before initializing a new worker pool
+        closeAllOldWorkerTabs(overviewTabId).then(() => {
+            pathOrchestrator = {
+                isRunning: true,
+                pathTitle: request.pathTitle || "Learning Path",
+                pathUrl: request.pathUrl || "",
+                courses: courses,
+                maxConcurrency: concurrency,
+                targetSpeed: speed,
+                activeWorkers: new Map(),
+                overviewTabId: overviewTabId
+            };
 
-        savePathState();
-        dispatchNextPathWorkers();
+            savePathState();
+            dispatchNextPathWorkers();
+        });
 
         sendResponse({ status: "started", totalCourses: courses.length, maxConcurrency: concurrency });
         return true;
@@ -385,6 +466,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const conc = Math.max(1, Math.min(5, parseInt(request.concurrency, 10) || 3));
         pathOrchestrator.maxConcurrency = conc;
         chrome.storage.local.set({ linkedinPathConcurrency: conc });
+
+        // If currently open workers exceed new concurrency, close excess worker tabs immediately!
+        while (pathOrchestrator.activeWorkers.size > conc) {
+            const [excessTabId, courseId] = Array.from(pathOrchestrator.activeWorkers.entries()).pop();
+            pathOrchestrator.activeWorkers.delete(excessTabId);
+            untrackWorkerTabId(excessTabId);
+            chrome.tabs.remove(excessTabId).catch(() => {});
+            const course = pathOrchestrator.courses.find(c => c.id === courseId);
+            if (course && course.status === 'running') {
+                course.status = 'queued';
+                course.tabId = null;
+                course.currentItem = 'Queued';
+            }
+        }
+
         savePathState();
         broadcastPathProgress();
         if (pathOrchestrator.isRunning) {
@@ -410,20 +506,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === "stop_learning_path") {
         pathOrchestrator.isRunning = false;
-        // Close all active worker tabs
-        for (const [tabId] of pathOrchestrator.activeWorkers) {
-            chrome.tabs.remove(tabId).catch(() => {});
-        }
-        pathOrchestrator.activeWorkers.clear();
-        pathOrchestrator.courses.forEach(c => {
-            if (c.status === 'running') {
-                c.status = 'queued';
-                c.tabId = null;
-                c.currentItem = 'Stopped';
-            }
+        // Close all active worker tabs and clean up
+        closeAllOldWorkerTabs(pathOrchestrator.overviewTabId).then(() => {
+            pathOrchestrator.courses.forEach(c => {
+                if (c.status === 'running') {
+                    c.status = 'queued';
+                    c.tabId = null;
+                    c.currentItem = 'Stopped';
+                }
+            });
+            savePathState();
+            broadcastPathProgress();
         });
-        savePathState();
-        broadcastPathProgress();
         sendResponse({ status: "stopped" });
         return true;
     }
@@ -457,6 +551,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         if (workerTabId) {
             pathOrchestrator.activeWorkers.delete(workerTabId);
+            untrackWorkerTabId(workerTabId);
             // Automatically close completed course tab!
             chrome.tabs.remove(workerTabId).catch(() => {});
         }
@@ -566,6 +661,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // Track closed tabs (Worker cleanup & fail-safe)
 chrome.tabs.onRemoved.addListener((tabId) => {
+    untrackWorkerTabId(tabId);
     if (pathOrchestrator.isRunning && pathOrchestrator.activeWorkers.has(tabId)) {
         const courseId = pathOrchestrator.activeWorkers.get(tabId);
         pathOrchestrator.activeWorkers.delete(tabId);

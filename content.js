@@ -7437,6 +7437,12 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
                 'linkedinQueueRunning',
                 'linkedinTargetSpeed'
             ]).catch(() => {});
+        } else if (courseId && !globalState.abortRequested) {
+            // Worker tab completed execution — ensure background orchestrator closes tab and advances queue
+            chrome.runtime.sendMessage({
+                action: "path_worker_course_completed",
+                courseId: courseId
+            }).catch(() => {});
         }
 
         stopLinkedInVideoPlayback();

@@ -16,6 +16,15 @@ function setRunningUIState(isRunning) {
 
     const completeBtn = document.getElementById('completeBtn');
     if (completeBtn) completeBtn.disabled = isRunning;
+
+    const liCompleteBtn = document.getElementById('linkedinCompleteBtn');
+    if (liCompleteBtn) liCompleteBtn.disabled = isRunning;
+
+    const liSingleBtn = document.getElementById('linkedinSingleBtn');
+    if (liSingleBtn) liSingleBtn.disabled = isRunning;
+
+    // Keep speed selector active during playback so user can switch speed dynamically
+    const liSpeedSelect = document.getElementById('linkedinSpeedSelect');
     
     const stopBtn = document.getElementById('stopBtn');
     if (stopBtn) {
@@ -370,6 +379,82 @@ async function sendTabMessageWithAutoInject(tabId, message, onComplete) {
     });
 }
 
+// LinkedIn Learning Buttons
+const linkedinCompleteBtn = document.getElementById('linkedinCompleteBtn');
+if (linkedinCompleteBtn) {
+    linkedinCompleteBtn.addEventListener('click', async () => {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || !tab.url || !tab.url.includes("linkedin.com/learning")) {
+            document.getElementById('status').innerText = "Error: Not on LinkedIn Learning!";
+            return;
+        }
+
+        const speedSelect = document.getElementById('linkedinSpeedSelect');
+        const speed = speedSelect ? parseFloat(speedSelect.value) || 16.0 : 16.0;
+
+        setRunningUIState(true);
+        document.getElementById('status').innerText = `Running LinkedIn Completer (${speed}x Turbo)...`;
+
+        sendTabMessageWithAutoInject(tab.id, { 
+            action: "start_linkedin_videos", 
+            speed: speed 
+        }, (response, err) => {
+            if (err) {
+                setRunningUIState(false);
+                document.getElementById('status').innerText = "Error: Refresh page & try again.";
+            }
+        });
+    });
+}
+
+const linkedinSingleBtn = document.getElementById('linkedinSingleBtn');
+if (linkedinSingleBtn) {
+    linkedinSingleBtn.addEventListener('click', async () => {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || !tab.url || !tab.url.includes("linkedin.com/learning")) {
+            document.getElementById('status').innerText = "Error: Not on LinkedIn Learning!";
+            return;
+        }
+
+        const speedSelect = document.getElementById('linkedinSpeedSelect');
+        const speed = speedSelect ? parseFloat(speedSelect.value) || 16.0 : 16.0;
+
+        setRunningUIState(true);
+        document.getElementById('status').innerText = `Fast-Forwarding Active Video (${speed}x)...`;
+
+        sendTabMessageWithAutoInject(tab.id, { 
+            action: "start_linkedin_single_video", 
+            speed: speed 
+        }, (response, err) => {
+            if (err) {
+                setRunningUIState(false);
+                document.getElementById('status').innerText = "Error: Refresh page & try again.";
+            }
+        });
+    });
+}
+
+const linkedinSpeedSelect = document.getElementById('linkedinSpeedSelect');
+if (linkedinSpeedSelect) {
+    chrome.storage.local.get(['linkedinTargetSpeed'], (res) => {
+        if (res.linkedinTargetSpeed) {
+            linkedinSpeedSelect.value = String(res.linkedinTargetSpeed);
+        }
+    });
+
+    linkedinSpeedSelect.addEventListener('change', async () => {
+        const speed = parseFloat(linkedinSpeedSelect.value) || 16.0;
+        await chrome.storage.local.set({ linkedinTargetSpeed: speed });
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab && tab.id) {
+            chrome.tabs.sendMessage(tab.id, { 
+                action: "set_linkedin_speed", 
+                speed: speed 
+            }).catch(() => {});
+        }
+    });
+}
+
 // Stop Button
 document.getElementById('stopBtn').addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -385,9 +470,15 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
 
 document.getElementById('startBtn').addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url) return;
     
-    if (!tab || !tab.url || !tab.url.includes("coursera.org")) {
-        document.getElementById('status').innerText = "Error: Not on Coursera!";
+    if (tab.url.includes("linkedin.com/learning")) {
+        if (linkedinCompleteBtn) linkedinCompleteBtn.click();
+        return;
+    }
+
+    if (!tab.url.includes("coursera.org")) {
+        document.getElementById('status').innerText = "Error: Not on Coursera or LinkedIn!";
         return;
     }
 
@@ -440,10 +531,41 @@ document.getElementById('readBtn').addEventListener('click', async () => {
     });
 });
 
-// Check for running process or existing state on load
+// Check for running process or existing state on load & adapt platform UI
 (async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.url && tab.url.includes("coursera.org")) {
+    if (!tab || !tab.url) return;
+
+    const isLinkedIn = tab.url.includes("linkedin.com/learning");
+    const isCoursera = tab.url.includes("coursera.org");
+
+    const platformTag = document.getElementById('platformTag');
+    const linkedinSection = document.getElementById('linkedinSection');
+    const courseraSection = document.getElementById('courseraSection');
+    const aiSettingsSection = document.getElementById('aiSettingsSection');
+
+    if (isLinkedIn) {
+        if (linkedinSection) linkedinSection.style.display = 'block';
+        if (courseraSection) courseraSection.style.display = 'none';
+        if (aiSettingsSection) aiSettingsSection.style.display = 'none';
+        if (platformTag) {
+            platformTag.innerText = "LinkedIn Learning";
+            platformTag.style.color = "#38bdf8";
+            platformTag.style.borderColor = "rgba(56, 189, 248, 0.4)";
+        }
+        document.getElementById('status').innerText = "Ready on LinkedIn Learning";
+    } else if (isCoursera) {
+        if (linkedinSection) linkedinSection.style.display = 'none';
+        if (courseraSection) courseraSection.style.display = 'block';
+        if (aiSettingsSection) aiSettingsSection.style.display = 'block';
+        if (platformTag) {
+            platformTag.innerText = "v2.2 Pro";
+        }
+    } else {
+        document.getElementById('status').innerText = "Open Coursera or LinkedIn Learning";
+    }
+
+    if (isCoursera || isLinkedIn) {
         sendTabMessageWithAutoInject(tab.id, { action: "get_status" }, (response) => {
             if (!response) return;
             
@@ -571,6 +693,12 @@ document.getElementById('quizBtn').addEventListener('click', async () => {
 });
 
 document.getElementById('completeBtn').addEventListener('click', async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && tab.url && tab.url.includes("linkedin.com/learning")) {
+        if (linkedinCompleteBtn) linkedinCompleteBtn.click();
+        return;
+    }
+
     const config = getAIConfig();
     if (!config.apiKey && config.provider !== 'custom') {
         document.getElementById('status').innerText = `Enter ${config.provider} API Key first!`;
@@ -579,8 +707,6 @@ document.getElementById('completeBtn').addEventListener('click', async () => {
     
     saveSettings();
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
     if (!tab || !tab.url || !tab.url.includes("coursera.org")) {
         document.getElementById('status').innerText = "Error: Not on Coursera!";
         return;

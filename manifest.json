@@ -15,6 +15,7 @@
   },
   "host_permissions": [
     "https://www.coursera.org/*",
+    "https://www.linkedin.com/learning/*",
     "<all_urls>"
   ],
   "action": {
@@ -28,7 +29,10 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.coursera.org/*"],
+      "matches": [
+        "https://www.coursera.org/*",
+        "https://www.linkedin.com/learning/*"
+      ],
       "js": ["content.js"]
     }
   ]

@@ -1,5 +1,32 @@
 # FcukCoursera - Development Progress & Status Tracker
 
+## Session Summary (2026-09-28)
+
+- ✨ **LinkedIn Learning Smart Completer, MAIN World Speed Override & Quiz Skipper (`content.js`, `background.js`, `popup.html`, `popup.js`, `README.md`)**:
+  - **MAIN World Speed Multiplier (`background.js` & `content.js`)**:
+    - Identified root cause of speed multiplier failure: LinkedIn Learning's React/Video.js player runs in the page's MAIN world, listens to `ratechange` events, and immediately resets `playbackRate` back to 1.0x or native speed whenever changed from an isolated content script world.
+    - Implemented `inject_main_world_speed` in `background.js` using `chrome.scripting.executeScript({ target, world: 'MAIN', func })` to monkey-patch `HTMLMediaElement.prototype.playbackRate` and `defaultPlaybackRate` directly in the page execution context. Intercepts player setter calls and enforces the user-selected speed (up to 16x Turbo) while muting audio (`muted = true`, `defaultMuted = true`, `volume = 0`) to prevent audio buffer underruns.
+    - Added dynamic live speed adjustment: enabled `#linkedinSpeedSelect` in `popup.js` during active runs to stream instant speed updates via `chrome.tabs.sendMessage` to both the isolated and MAIN world contexts.
+  - **Smart Instant Checkmark Advance (`isCurrentLinkedInLessonCompleted`)**:
+    - Discovered that LinkedIn Learning registers completion telemetry with the server well before the final video frame (typically at ~75-85% playback or on progress ping), rendering an SVG checkmark (`svg[data-test-icon*="check"]`), `.classroom-toc-item--completed`, or Up-Next card.
+    - Implemented `isCurrentLinkedInLessonCompleted()` continuous poll in `playLinkedInVideoToCompletion`. The instant the active TOC item acquires a completion checkmark or Up-Next appears, it terminates video playback and advances immediately to the next video, saving substantial time.
+  - **Stuck / Buffering Watchdog & Auto-Refresh (`refreshLinkedInVideo`)**:
+    - Fixed stalled detection logic to detect freezes both while playing (`currentTime` frozen) and while unexpectedly paused (`video.paused && !video.ended`).
+    - Engineered 4-stage progressive recovery:
+      - 2.5s stall: Nudges `video.currentTime += 0.5` and calls `video.play()`.
+      - 5.0s stall: Refreshes the video stream by triggering player retry/play buttons and calling `video.load()` to reconnect the HTML5 media resource without losing course state.
+      - 8.0s stall: Steps down speed to 4x to relieve MSE network buffer throttling.
+      - 12.0s stall: Reloads page with persistent queue auto-resume.
+  - **Automatic Quiz & Assessment Skipper (`isLinkedInQuizPage`, `skipLinkedInQuizIfPresent`, `scanLinkedInTOC`)**:
+    - Upgraded `scanLinkedInTOC()` to detect chapter quizzes, practice exams, assessments, and knowledge checks via regex title matching, URLs (`/quiz/`, `/assessment/`), ARIA labels, and SVG icons.
+    - Separated `uncompletedVideos` from quizzes; the sequential advancer (`advanceToNextLinkedInVideo`) exclusively targets uncompleted video lessons and completely bypasses quizzes in the syllabus.
+    - Implemented `skipLinkedInQuizIfPresent()` to automatically locate and click "Skip quiz", "Skip", "Skip to next", or "Next" controls on screen if the course auto-navigates into a quiz, or directly jump to the next video from the TOC.
+  - **LinkedIn Learning Base Engine (`content.js`, `popup.html`, `popup.js`, `manifest.json`)**:
+    - Built Table of Contents (TOC) scanner & chapter expander (`scanLinkedInTOC` & `expandAllLinkedInChapters`).
+    - Added cross-navigation persistent queue runner (`startLinkedInCourseCompletionProcess` & auto-resume IIFE) with storage sync.
+    - Built adaptive popup UI (`popup.html` & `popup.js`) detecting Coursera vs. LinkedIn Learning automatically.
+    - Added `https://www.linkedin.com/learning/*` permissions to `manifest.json`.
+
 ## Session Summary (2026-08-30)
 
 - 🐛 **Eliminated Hoisted Duplicate Helpers & Fixed React Aria Event Simulation (`content.js`)**:

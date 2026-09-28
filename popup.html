@@ -419,30 +419,56 @@
     </div>
     <div class="brand-tag">
       <div id="statusDot" class="status-dot"></div>
-      <span>v2.2 Pro</span>
+      <span id="platformTag">v2.2 Pro</span>
     </div>
   </div>
 
-  <!-- Primary Hero Action -->
-  <div class="action-hero">
-    <button id="completeBtn" class="btn-hero">🚀 Complete Course (All-in-One)</button>
+  <!-- LinkedIn Learning Dedicated Actions -->
+  <div id="linkedinSection" style="display: none;">
+    <div class="action-hero">
+      <button id="linkedinCompleteBtn" class="btn-hero" style="background: linear-gradient(135deg, #0284c7 0%, #0369a1 50%, #075985 100%); border-color: rgba(56, 189, 248, 0.4); box-shadow: 0 4px 14px rgba(2, 132, 199, 0.3);">
+        ⚡ Complete All Videos (16x Turbo)
+      </button>
+    </div>
+    <div class="action-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 10px;">
+      <button id="linkedinSingleBtn" class="btn-action" style="background: rgba(14, 165, 233, 0.15); border-color: rgba(14, 165, 233, 0.4); color: #7dd3fc; font-weight: 700;">
+        ▶ Fast-Forward Video
+      </button>
+      <div style="display: flex; align-items: center; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 7px; padding: 0 8px;">
+        <span style="font-size: 10px; color: #94a3b8; font-weight: 600; margin-right: 5px;">Speed:</span>
+        <select id="linkedinSpeedSelect" style="background: transparent; border: none; color: #38bdf8; font-size: 11px; font-weight: 700; outline: none; cursor: pointer; width: 100%;">
+          <option value="16" selected>16x Turbo</option>
+          <option value="8">8x Ultra</option>
+          <option value="4">4x Fast</option>
+          <option value="2">2x Native</option>
+        </select>
+      </div>
+    </div>
   </div>
 
-  <!-- Action Grid -->
-  <div class="action-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 6px;">
-    <button id="quizOnScreenBtn" class="btn-action" style="background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd; font-weight: 700;">🎯 Solve on Screen</button>
-    <button id="appItemBtn" class="btn-action" style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.4); color: #6ee7b7; font-weight: 700;">📱 Complete App Items</button>
-  </div>
-  <div class="action-grid" style="grid-template-columns: 1fr 1fr 1fr; margin-bottom: 12px;">
-    <button id="quizBtn" class="btn-action">⚡ Quizzes</button>
-    <button id="startBtn" class="btn-action">▶ Videos</button>
-    <button id="readBtn" class="btn-action">✓ Readings</button>
+  <!-- Coursera Dedicated Actions -->
+  <div id="courseraSection">
+    <!-- Primary Hero Action -->
+    <div class="action-hero">
+      <button id="completeBtn" class="btn-hero">🚀 Complete Course (All-in-One)</button>
+    </div>
+
+    <!-- Action Grid -->
+    <div class="action-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 6px;">
+      <button id="quizOnScreenBtn" class="btn-action" style="background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd; font-weight: 700;">🎯 Solve on Screen</button>
+      <button id="appItemBtn" class="btn-action" style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.4); color: #6ee7b7; font-weight: 700;">📱 Complete App Items</button>
+    </div>
+    <div class="action-grid" style="grid-template-columns: 1fr 1fr 1fr; margin-bottom: 12px;">
+      <button id="quizBtn" class="btn-action">⚡ Quizzes</button>
+      <button id="startBtn" class="btn-action">▶ Videos</button>
+      <button id="readBtn" class="btn-action">✓ Readings</button>
+    </div>
   </div>
 
   <button id="stopBtn" class="btn-stop">🛑 Stop Active Process</button>
 
   <!-- AI Settings -->
-  <div class="settings-section">
+  <div id="aiSettingsSection" class="settings-section">
     <div class="settings-header">
       <span class="settings-title">AI Engine Settings</span>
     </div>

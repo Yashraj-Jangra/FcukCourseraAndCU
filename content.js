@@ -142,9 +142,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 'masterCourseQueue', 'masterCourseIndex', 'masterAiConfig', 
                 'masterCourseSlug', 'masterCourseTitle', 'masterUserId', 
                 'masterCourseId', 'masterModules', 'masterManualAttention',
-                'activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId'
+                'activeAppQueue', 'appQueueIndex', 'appCourseSlug', 'appCourseTitle', 'appUserId', 'appCourseId',
+                'linkedinQueueRunning', 'linkedinTargetSpeed'
             ]).catch(() => {});
             hideOnScreenHUD();
+            stopLinkedInVideoPlayback();
             sendResponse({ status: "stopping" });
         } else {
             sendResponse({ status: "not_running" });
@@ -159,6 +161,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         globalState.isRunning = true;
         globalState.abortRequested = false;
+
+        if (isLinkedInLearningPlatform()) {
+            globalState.currentAction = "linkedin_video";
+            startLinkedInCourseCompletionProcess({ speed: 16.0, singleVideoOnly: false }).finally(() => { 
+                globalState.isRunning = false;
+                globalState.abortRequested = false;
+            });
+            sendResponse({ status: "started" });
+            return;
+        }
+
         globalState.currentAction = "skipping";
         startSkippingProcess().finally(() => { 
             globalState.isRunning = false;
@@ -166,6 +179,49 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         sendResponse({ status: "started" });
     }
+
+    if (request.action === "start_linkedin_videos") {
+        if (globalState.isRunning) {
+            sendResponse({ status: "already_running" });
+            return;
+        }
+        globalState.isRunning = true;
+        globalState.abortRequested = false;
+        globalState.currentAction = "linkedin_video";
+        const speed = request.speed || 16.0;
+        startLinkedInCourseCompletionProcess({ speed: speed, singleVideoOnly: false }).finally(() => { 
+            globalState.isRunning = false;
+            globalState.abortRequested = false;
+        });
+        sendResponse({ status: "started" });
+        return;
+    }
+
+    if (request.action === "start_linkedin_single_video") {
+        if (globalState.isRunning) {
+            sendResponse({ status: "already_running" });
+            return;
+        }
+        globalState.isRunning = true;
+        globalState.abortRequested = false;
+        globalState.currentAction = "linkedin_single_video";
+        const speed = request.speed || 16.0;
+        startLinkedInCourseCompletionProcess({ speed: speed, singleVideoOnly: true }).finally(() => { 
+            globalState.isRunning = false;
+            globalState.abortRequested = false;
+        });
+        sendResponse({ status: "started" });
+        return;
+    }
+
+    if (request.action === "set_linkedin_speed") {
+        const speed = parseFloat(request.speed) || 16.0;
+        log(`[LinkedIn] Target speed updated to ${speed}x.`);
+        applyLinkedInSpeed(speed);
+        sendResponse({ status: "speed_updated", speed: speed });
+        return;
+    }
+
     if (request.action === "start_reading_completion") {
         if (globalState.isRunning) {
             sendResponse({ status: "already_running" });
@@ -235,6 +291,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         globalState.isRunning = true;
         globalState.abortRequested = false;
+
+        if (isLinkedInLearningPlatform()) {
+            globalState.currentAction = "linkedin_video";
+            startLinkedInCourseCompletionProcess({ speed: 16.0, singleVideoOnly: false }).finally(() => { 
+                globalState.isRunning = false;
+                globalState.abortRequested = false;
+            });
+            sendResponse({ status: "started" });
+            return;
+        }
+
         globalState.currentAction = "complete";
         const aiConfig = request.aiConfig || request.apiKey;
         startCompleteCourseProcess(aiConfig).finally(() => { 
@@ -5160,12 +5227,805 @@ Strict Safety & Style Guidelines:
     }
 }
 
-// Auto-Resume Persistent Master Chronological Queue or App Queue on Page Load
+// ==========================================
+// LinkedIn Learning Video Completer Engine
+// ==========================================
+
+function isLinkedInLearningPlatform() {
+    return window.location.hostname.includes("linkedin.com") && window.location.pathname.includes("/learning");
+}
+
+let currentLinkedInSpeed = 16.0;
+
+function injectMainWorldSpeedScript(speed = 16.0) {
+    try {
+        // 1. Request background service worker to execute in MAIN world via chrome.scripting
+        chrome.runtime.sendMessage({ 
+            action: "inject_main_world_speed", 
+            speed: speed 
+        }).catch(() => {});
+
+        // 2. Post message to page window for any already-active MAIN world listener
+        window.postMessage({ 
+            type: '__FCUK_LINKEDIN_SPEED__', 
+            speed: speed, 
+            active: true 
+        }, '*');
+
+        // 3. Fallback direct DOM script injection in case background worker is waking up
+        const scriptId = '__fcuk_speed_injector';
+        if (!document.getElementById(scriptId)) {
+            const script = document.createElement('script');
+            script.id = scriptId;
+            script.textContent = `(${function() {
+                try {
+                    window.__fcukLinkedInTargetSpeed = 16.0;
+                    window.__fcukLinkedInSpeedActive = true;
+
+                    if (!window.__fcukPlaybackRatePatched) {
+                        window.__fcukPlaybackRatePatched = true;
+                        const origDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
+                        window.__fcukOriginalPlaybackDesc = origDesc;
+
+                        Object.defineProperty(HTMLMediaElement.prototype, 'playbackRate', {
+                            get: function() {
+                                if (window.__fcukLinkedInSpeedActive && window.__fcukLinkedInTargetSpeed) {
+                                    return window.__fcukLinkedInTargetSpeed;
+                                }
+                                return origDesc ? origDesc.get.call(this) : 1.0;
+                            },
+                            set: function(val) {
+                                const effective = (window.__fcukLinkedInSpeedActive && window.__fcukLinkedInTargetSpeed)
+                                    ? window.__fcukLinkedInTargetSpeed
+                                    : val;
+                                if (origDesc) {
+                                    return origDesc.set.call(this, effective);
+                                }
+                            },
+                            configurable: true,
+                            enumerable: true
+                        });
+                    }
+
+                    window.addEventListener('message', (e) => {
+                        if (e.data && e.data.type === '__FCUK_LINKEDIN_SPEED__') {
+                            window.__fcukLinkedInTargetSpeed = Number(e.data.speed) || 16.0;
+                            window.__fcukLinkedInSpeedActive = !!e.data.active;
+                            const orig = window.__fcukOriginalPlaybackDesc;
+                            document.querySelectorAll('video').forEach(v => {
+                                try {
+                                    v.muted = true;
+                                    v.defaultMuted = true;
+                                    v.volume = 0;
+                                    if (orig && window.__fcukLinkedInSpeedActive) {
+                                        orig.set.call(v, window.__fcukLinkedInTargetSpeed);
+                                    } else if (window.__fcukLinkedInSpeedActive) {
+                                        v.playbackRate = window.__fcukLinkedInTargetSpeed;
+                                    }
+                                } catch(err) {}
+                            });
+                        }
+                    });
+                } catch(e) {}
+            }})();`;
+            (document.head || document.documentElement).appendChild(script);
+        }
+    } catch(e) {
+        console.log("Notice in injectMainWorldSpeedScript:", e);
+    }
+}
+
+function applyLinkedInSpeed(speed = 16.0) {
+    currentLinkedInSpeed = speed;
+    injectMainWorldSpeedScript(speed);
+
+    const video = getLinkedInVideo();
+    if (video) {
+        try {
+            video.muted = true;
+            video.defaultMuted = true;
+            video.volume = 0;
+            video.playbackRate = speed;
+        } catch(e) {}
+    }
+}
+
+function getLinkedInVideo() {
+    return document.querySelector('video') || 
+           document.querySelector('.video-player video') || 
+           document.querySelector('.vjs-tech') ||
+           document.querySelector('[data-video-id] video') ||
+           document.querySelector('video.classroom-player__video');
+}
+
+async function waitForLinkedInVideo(timeoutMs = 12000) {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
+        if (globalState.abortRequested) return null;
+        
+        // If current page is a quiz, return early so quiz skipper handles it
+        if (isLinkedInQuizPage()) {
+            return null;
+        }
+
+        const video = getLinkedInVideo();
+        if (video && (video.readyState >= 1 || video.duration > 0 || !isNaN(video.duration))) {
+            return video;
+        }
+        await new Promise(r => setTimeout(r, 200));
+    }
+    return getLinkedInVideo();
+}
+
+function expandAllLinkedInChapters() {
+    try {
+        const collapsedButtons = document.querySelectorAll(
+            '.classroom-toc button[aria-expanded="false"], ' +
+            '[class*="classroom-toc"] button[aria-expanded="false"], ' +
+            '[class*="toc-chapter"] button[aria-expanded="false"], ' +
+            '[class*="toc-section"] button[aria-expanded="false"], ' +
+            'nav[aria-label*="Table of contents" i] button[aria-expanded="false"], ' +
+            'nav[aria-label*="Contents" i] button[aria-expanded="false"]'
+        );
+        collapsedButtons.forEach(btn => {
+            try {
+                btn.click();
+            } catch(e) {}
+        });
+    } catch(e) {}
+}
+
+function isLinkedInQuizPage() {
+    const path = (window.location.pathname || '').toLowerCase();
+    if (path.includes('/quiz/') || path.includes('/assessment/') || path.includes('/exam/')) {
+        return true;
+    }
+
+    const quizContainers = document.querySelector(
+        '.quiz-layout, ' +
+        '.classroom-assessment, ' +
+        '[data-control-name="quiz"], ' +
+        'form.quiz-form, ' +
+        '[data-test-id*="quiz"], ' +
+        '[class*="quiz-module"], ' +
+        '[class*="assessment-container"]'
+    );
+    if (quizContainers) return true;
+
+    const headings = Array.from(document.querySelectorAll('h1, h2, h3'));
+    if (headings.some(h => /chapter quiz|practice exam|assessment|knowledge check/i.test(h.innerText || ''))) {
+        return true;
+    }
+
+    return false;
+}
+
+function isCurrentLinkedInLessonCompleted() {
+    try {
+        // 1. Check active item in TOC for completed checkmark
+        const activeTocItem = document.querySelector(
+            'li.classroom-toc-item--selected, ' +
+            'li[class*="classroom-toc-item--selected"], ' +
+            'li[class*="classroom-toc-item"][aria-current="true"], ' +
+            'a.classroom-toc-item__link--selected, ' +
+            'a[aria-current="page"], ' +
+            'a[aria-current="true"]'
+        );
+
+        if (activeTocItem) {
+            const check = activeTocItem.querySelector(
+                'svg[data-test-icon*="check" i], ' +
+                'svg[type="check"], ' +
+                '[data-test-icon="check-small"], ' +
+                '[data-test-icon="check"], ' +
+                'svg[aria-label*="completed" i], ' +
+                'svg[aria-label*="watched" i], ' +
+                '[class*="completed" i], ' +
+                '[class*="is-complete" i], ' +
+                '[class*="checked" i]'
+            );
+            const aria = ((activeTocItem.getAttribute('aria-label') || '') + ' ' + (activeTocItem.querySelector('a')?.getAttribute('aria-label') || '')).toLowerCase();
+            const isCompletedClass = activeTocItem.classList.contains('classroom-toc-item--completed') || 
+                                     activeTocItem.className.includes('completed') ||
+                                     activeTocItem.className.includes('is-complete');
+            if (check || isCompletedClass || aria.includes('completed') || aria.includes('watched')) {
+                return true;
+            }
+        }
+
+        // 2. Cross-reference with scanLinkedInTOC
+        const toc = scanLinkedInTOC();
+        if (toc.activeItem && toc.activeItem.isCompleted) {
+            return true;
+        }
+
+        // 3. Up-Next countdown / Next button overlay visible on player
+        const upNextOverlay = document.querySelector(
+            'button[data-control-name="up_next_play"], ' +
+            '.classroom-player__up-next, ' +
+            '[class*="up-next"] button, ' +
+            '[data-test-id*="up-next"]'
+        );
+        if (upNextOverlay && upNextOverlay.offsetParent !== null) {
+            return true;
+        }
+    } catch(e) {}
+    return false;
+}
+
+async function refreshLinkedInVideo(video) {
+    log("[LinkedIn] 🔄 Video stuck/buffering! Refreshing video stream...", "warning");
+    showOnScreenHUD("🔄 Video stuck — Refreshing video...", "warning");
+
+    // 1. Look for and click Retry / Play / Reload buttons in the player
+    const playerControlBtns = [
+        'button[aria-label*="retry" i]',
+        'button[aria-label*="reload" i]',
+        '.vjs-error-display button',
+        'button.classroom-player__play-button',
+        'button[data-control-name="play"]',
+        'button[aria-label*="play" i]'
+    ];
+    for (const sel of playerControlBtns) {
+        const btn = document.querySelector(sel);
+        if (btn && btn.offsetParent !== null) {
+            log(`[LinkedIn] Triggering player recovery control: ${sel}`);
+            clickNativeElement(btn);
+            await new Promise(r => setTimeout(r, 400));
+            break;
+        }
+    }
+
+    // 2. Refresh the underlying HTMLMediaElement
+    try {
+        const savedTime = video.currentTime || 0;
+        video.pause();
+        video.load(); // Forces HTML5 media element to reconnect and reload media resource
+        video.currentTime = Math.max(0, savedTime);
+        video.muted = true;
+        video.defaultMuted = true;
+        video.volume = 0;
+        video.playbackRate = currentLinkedInSpeed || 16.0;
+        await video.play().catch(() => {});
+    } catch(e) {
+        console.log("Error during video.load():", e);
+    }
+}
+
+async function skipLinkedInQuizIfPresent() {
+    if (!isLinkedInQuizPage()) return false;
+
+    log("[LinkedIn] ⏭️ Optional Quiz/Assessment detected. Automatically skipping...", "warning");
+    showOnScreenHUD("⏭️ Skipping Optional Quiz...", "warning");
+
+    // 1. Find and click Skip button if visible on screen
+    const clickable = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+    for (const el of clickable) {
+        const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+        if (txt === 'skip' || txt === 'skip quiz' || txt === 'skip to next' || txt === 'skip assessment' ||
+            aria.includes('skip quiz') || aria.includes('skip assessment')) {
+            log(`[LinkedIn] Found skip action: "${txt || aria}". Skipping...`);
+            clickNativeElement(el);
+            await new Promise(r => setTimeout(r, 2000));
+            return true;
+        }
+    }
+
+    // 2. Find and click Next button on quiz page
+    const nextSelectors = [
+        'button.classroom-nav__next',
+        '.classroom-nav__next button',
+        'button[data-control-name="up_next_play"]',
+        'button[aria-label*="Next video" i]',
+        'button[aria-label*="Next" i]',
+        'button[data-control-name*="next" i]',
+        'a[data-control-name*="next" i]'
+    ];
+    for (const sel of nextSelectors) {
+        const btn = document.querySelector(sel);
+        if (btn && !btn.disabled && btn.offsetParent !== null) {
+            log("[LinkedIn] Clicking next button to advance past quiz...");
+            clickNativeElement(btn);
+            await new Promise(r => setTimeout(r, 2000));
+            return true;
+        }
+    }
+
+    // 3. Jump directly to the next uncompleted video from TOC
+    const toc = scanLinkedInTOC();
+    if (toc.uncompletedVideos && toc.uncompletedVideos.length > 0) {
+        let target = null;
+        if (toc.activeItem) {
+            target = toc.uncompletedVideos.find(it => it.index > toc.activeItem.index) || toc.uncompletedVideos[0];
+        } else {
+            target = toc.uncompletedVideos[0];
+        }
+
+        if (target) {
+            log(`[LinkedIn] Bypassing quiz -> jumping directly to next video: "${target.title}"`);
+            if (target.linkElement) {
+                clickNativeElement(target.linkElement);
+            } else if (target.href) {
+                window.location.href = target.href;
+            }
+            await new Promise(r => setTimeout(r, 2500));
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function scanLinkedInTOC() {
+    expandAllLinkedInChapters();
+
+    const candidateSelectors = [
+        'li.classroom-toc-item',
+        'li[class*="classroom-toc-item"]',
+        '[data-control-name="toc_item"]',
+        'li[class*="toc-item"]',
+        'a.classroom-toc-item__link',
+        'a[class*="classroom-toc-item"]',
+        'nav[aria-label*="Contents" i] li',
+        'nav[aria-label*="Table of contents" i] li'
+    ];
+
+    let rawItems = [];
+    for (const sel of candidateSelectors) {
+        const found = Array.from(document.querySelectorAll(sel));
+        if (found.length > 0) {
+            rawItems = found;
+            break;
+        }
+    }
+
+    if (rawItems.length === 0) {
+        rawItems = Array.from(document.querySelectorAll('a[href*="/learning/"]')).filter(a => {
+            const path = a.getAttribute('href') || '';
+            return path.split('/').filter(Boolean).length >= 3 && !path.includes('/search') && !path.includes('/topics');
+        });
+    }
+
+    const items = [];
+    const completedItems = [];
+    const uncompletedItems = [];
+    let activeItem = null;
+
+    rawItems.forEach((el, index) => {
+        const text = el.innerText || el.textContent || '';
+        const cleanTitle = text.replace(/\b\d+\s*m(?:in)?(?:\s*\d+\s*s)?\b/gi, '').replace(/\n+/g, ' ').trim() || `Lesson ${index + 1}`;
+        
+        const link = el.tagName.toLowerCase() === 'a' ? el : el.querySelector('a');
+        const href = link ? link.getAttribute('href') : null;
+
+        const hasCheckSvg = !!el.querySelector(
+            'svg[data-test-icon*="check" i], ' +
+            'svg[type="check"], ' +
+            '[data-test-icon="check-small"], ' +
+            '[data-test-icon="check"], ' +
+            'svg[aria-label*="completed" i], ' +
+            'svg[aria-label*="watched" i], ' +
+            'svg[aria-label*="Complete" i], ' +
+            '[class*="completed" i], ' +
+            '[class*="is-complete" i], ' +
+            '[class*="checked" i]'
+        );
+        const ariaLabel = ((el.getAttribute('aria-label') || '') + ' ' + (link?.getAttribute('aria-label') || '')).toLowerCase();
+        const isAriaCompleted = ariaLabel.includes('completed') || 
+                                ariaLabel.includes('watched') || 
+                                ariaLabel.includes('complete');
+        const hasCompletedClass = el.classList.contains('classroom-toc-item--completed') || 
+                                  el.className.includes('completed') || 
+                                  el.className.includes('is-complete');
+        
+        const isCompleted = hasCheckSvg || isAriaCompleted || hasCompletedClass;
+
+        const isQuiz = (
+            /quiz|assessment|practice\s+exam|exam\s+prep|knowledge\s+check|check\s+your\s+understanding/i.test(cleanTitle) ||
+            (href && (href.includes('/quiz/') || href.includes('/assessment/') || href.includes('/exam/'))) ||
+            !!el.querySelector('svg[data-test-icon*="quiz" i], svg[data-test-icon*="assessment" i], svg[data-test-icon*="clipboard" i], svg[data-test-icon*="document" i]') ||
+            el.className.includes('quiz') ||
+            el.className.includes('assessment') ||
+            el.getAttribute('data-control-name') === 'toc_quiz'
+        );
+
+        const isActive = el.classList.contains('classroom-toc-item--selected') ||
+                         el.getAttribute('aria-current') === 'true' ||
+                         el.getAttribute('aria-current') === 'page' ||
+                         (link && (link.getAttribute('aria-current') === 'true' || link.classList.contains('active'))) ||
+                         el.className.includes('selected') ||
+                         el.className.includes('active');
+
+        const itemObj = {
+            index,
+            element: el,
+            linkElement: link || el,
+            title: cleanTitle,
+            href,
+            isCompleted,
+            isQuiz,
+            isActive
+        };
+
+        items.push(itemObj);
+        if (isCompleted) {
+            completedItems.push(itemObj);
+        } else {
+            uncompletedItems.push(itemObj);
+        }
+        if (isActive) {
+            activeItem = itemObj;
+        }
+    });
+
+    const uncompletedVideos = uncompletedItems.filter(it => !it.isQuiz);
+    const completedVideos = completedItems.filter(it => !it.isQuiz);
+    const totalVideos = items.filter(it => !it.isQuiz);
+
+    return {
+        allItems: items,
+        completedItems,
+        uncompletedItems,
+        uncompletedVideos,
+        completedVideos,
+        totalVideos,
+        activeItem,
+        totalCount: totalVideos.length > 0 ? totalVideos.length : items.length,
+        completedCount: completedVideos.length
+    };
+}
+
+async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
+    // 0. Check if current page is an optional quiz/assessment and skip it
+    if (await skipLinkedInQuizIfPresent()) {
+        return true;
+    }
+
+    // 1. Check if the lesson is ALREADY marked completed in TOC
+    if (isCurrentLinkedInLessonCompleted()) {
+        log("[LinkedIn] 🎯 Smart Detection: Current video is ALREADY marked COMPLETED! Advancing immediately...", "success");
+        return true;
+    }
+
+    const video = await waitForLinkedInVideo(12000);
+    if (!video) {
+        if (await skipLinkedInQuizIfPresent()) {
+            return true;
+        }
+        throw new Error("Could not find active video player on page.");
+    }
+
+    if (isNaN(video.duration) || video.duration === 0) {
+        log("[LinkedIn] Waiting for video stream metadata...");
+        await new Promise(resolve => {
+            const onLoaded = () => {
+                video.removeEventListener('loadedmetadata', onLoaded);
+                resolve();
+            };
+            video.addEventListener('loadedmetadata', onLoaded);
+            setTimeout(resolve, 3000);
+        });
+    }
+
+    // Apply speed via multi-tier system (MAIN world injection + content script)
+    applyLinkedInSpeed(targetSpeed);
+
+    try {
+        await video.play();
+    } catch(e) {
+        log(`[LinkedIn] Playback notice: ${e.message}`, "warning");
+    }
+
+    log(`[LinkedIn] 🚀 Fast-forwarding video at ${targetSpeed}x Turbo speed (muted)...`);
+
+    const onRateChange = () => {
+        if (!globalState.abortRequested && video.playbackRate !== currentLinkedInSpeed) {
+            applyLinkedInSpeed(currentLinkedInSpeed);
+        }
+    };
+    video.addEventListener('ratechange', onRateChange);
+
+    let lastTime = video.currentTime;
+    let stuckCount = 0;
+
+    return new Promise((resolve) => {
+        let finished = false;
+
+        const cleanup = () => {
+            finished = true;
+            if (intervalId) clearInterval(intervalId);
+            video.removeEventListener('ratechange', onRateChange);
+        };
+
+        const onEnded = () => {
+            if (finished) return;
+            cleanup();
+            log(`[LinkedIn] ✓ Video reached natural conclusion.`);
+            resolve(true);
+        };
+
+        video.addEventListener('ended', onEnded, { once: true });
+
+        const intervalId = setInterval(async () => {
+            if (globalState.abortRequested) {
+                cleanup();
+                stopLinkedInVideoPlayback();
+                log("[LinkedIn] Playback stopped by user.");
+                resolve(false);
+                return;
+            }
+
+            // SMART DETECTION: Has LinkedIn recorded this lesson as completed?
+            if (isCurrentLinkedInLessonCompleted()) {
+                cleanup();
+                log("[LinkedIn] 🎯 Smart Detection: Lesson registered COMPLETED by LinkedIn Learning! Advancing immediately...", "success");
+                showOnScreenHUD("✓ Completed! Advancing...", "success");
+                resolve(true);
+                return;
+            }
+
+            // Check if reached end of video duration
+            if (video.duration > 0 && video.currentTime >= video.duration - 0.25) {
+                cleanup();
+                log(`[LinkedIn] ✓ Video reached conclusion (${Math.round(video.currentTime)}s/${Math.round(video.duration)}s).`);
+                resolve(true);
+                return;
+            }
+
+            // Continuously enforce playback rate and unpause
+            if (video.playbackRate !== currentLinkedInSpeed) {
+                applyLinkedInSpeed(currentLinkedInSpeed);
+            }
+            if (video.paused && !video.ended) {
+                video.play().catch(() => {});
+            }
+
+            const curr = Math.round(video.currentTime);
+            const total = Math.round(video.duration || 0);
+            const percent = total > 0 ? Math.round((curr / total) * 100) : 0;
+            const remainingSec = Math.max(0, Math.round((total - curr) / currentLinkedInSpeed));
+            showOnScreenHUD(`⚡ ${percent}% (${curr}s/${total}s) • ~${remainingSec}s left at ${currentLinkedInSpeed}x`, "working");
+
+            // STUCK / BUFFERING WATCHDOG: Detect freeze whether playing or paused
+            const isProgressing = Math.abs(video.currentTime - lastTime) >= 0.05 && !video.paused;
+            if (!isProgressing) {
+                stuckCount++;
+
+                // 2.5s stall: nudge currentTime and unpause
+                if (stuckCount === 10) {
+                    log("[LinkedIn] Buffering stall detected. Nudging video playback...", "warning");
+                    video.currentTime += 0.5;
+                    video.play().catch(() => {});
+                }
+                // 5.0s stall: refresh the video!
+                else if (stuckCount === 20) {
+                    await refreshLinkedInVideo(video);
+                }
+                // 8.0s stall: step down speed to 4x to recover buffer
+                else if (stuckCount === 32) {
+                    if (currentLinkedInSpeed > 4.0) {
+                        log("[LinkedIn] Stepping down speed to 4x to alleviate MSE buffer throttling...", "warning");
+                        applyLinkedInSpeed(4.0);
+                    }
+                    video.currentTime += 1.0;
+                    video.play().catch(() => {});
+                }
+                // 12.0s stall: complete freeze - reload page to recover
+                else if (stuckCount >= 48) {
+                    log("[LinkedIn] 🔄 Video player permanently stalled. Refreshing page to recover...", "error");
+                    showOnScreenHUD("🔄 Reloading page...", "error");
+                    cleanup();
+                    await chrome.storage.local.set({ 
+                        linkedinQueueRunning: true, 
+                        linkedinTargetSpeed: targetSpeed 
+                    });
+                    window.location.reload();
+                    resolve(false);
+                    return;
+                }
+            } else {
+                stuckCount = 0;
+                lastTime = video.currentTime;
+            }
+        }, 250);
+    });
+}
+
+async function advanceToNextLinkedInVideo() {
+    log("[LinkedIn] Advancing to next video...");
+
+    // Check if on a quiz and skip it first
+    if (await skipLinkedInQuizIfPresent()) {
+        return true;
+    }
+
+    const nextButtonSelectors = [
+        'button[data-control-name="up_next_play"]',
+        'button[data-control-name*="next" i]',
+        'button[aria-label*="Next video" i]',
+        'button[aria-label*="Next" i]',
+        'button[aria-label*="next" i]',
+        'button.classroom-nav__next',
+        '.classroom-nav__next button',
+        'a[data-control-name*="next" i]',
+        '[class*="up-next"] button',
+        '[class*="next-button"]',
+        'button:has(svg[data-test-icon="chevron-right-small"])'
+    ];
+
+    for (const sel of nextButtonSelectors) {
+        const btn = document.querySelector(sel);
+        if (btn && !btn.disabled && btn.offsetParent !== null) {
+            log(`[LinkedIn] Triggering next video control...`);
+            clickNativeElement(btn);
+            return true;
+        }
+    }
+
+    const toc = scanLinkedInTOC();
+    // Prioritize uncompleted videos (skipping all quizzes)
+    const queue = (toc.uncompletedVideos && toc.uncompletedVideos.length > 0) 
+        ? toc.uncompletedVideos 
+        : toc.uncompletedItems;
+
+    if (queue && queue.length > 0) {
+        let targetItem = null;
+        if (toc.activeItem) {
+            targetItem = queue.find(it => it.index > toc.activeItem.index) || queue[0];
+        } else {
+            targetItem = queue[0];
+        }
+
+        if (targetItem) {
+            log(`[LinkedIn] Selecting next lesson from syllabus: ${targetItem.title}`);
+            if (targetItem.linkElement) {
+                targetItem.linkElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                await new Promise(r => setTimeout(r, 200));
+                clickNativeElement(targetItem.linkElement);
+                return true;
+            } else if (targetItem.href) {
+                window.location.href = targetItem.href;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function stopLinkedInVideoPlayback() {
+    try {
+        const vid = getLinkedInVideo();
+        if (vid) {
+            vid.playbackRate = 1.0;
+            vid.muted = false;
+        }
+        chrome.storage.local.remove(['linkedinQueueRunning', 'linkedinTargetSpeed']).catch(() => {});
+        chrome.runtime.sendMessage({ action: "reset_main_world_speed" }).catch(() => {});
+        window.postMessage({ type: '__FCUK_LINKEDIN_SPEED__', speed: 1.0, active: false }, '*');
+    } catch(e) {}
+}
+
+async function startLinkedInCourseCompletionProcess(options = {}) {
+    const targetSpeed = options.speed || 16.0;
+    const singleOnly = !!options.singleVideoOnly;
+    currentLinkedInSpeed = targetSpeed;
+
+    log("==========================================");
+    log(`[LinkedIn Learning] Initializing Video Completer (${targetSpeed}x Turbo)...`);
+    log("==========================================");
+    showOnScreenHUD("LinkedIn Learning: Initializing Video Completer...", "working");
+
+    if (!singleOnly) {
+        await chrome.storage.local.set({
+            linkedinQueueRunning: true,
+            linkedinTargetSpeed: targetSpeed
+        });
+    }
+
+    let loopSafety = 0;
+    const MAX_VIDEOS = 150;
+
+    try {
+        while (!globalState.abortRequested && loopSafety < MAX_VIDEOS) {
+            loopSafety++;
+
+            // 1. Skip quiz / assessment if current screen is a quiz
+            const skippedQuiz = await skipLinkedInQuizIfPresent();
+            if (skippedQuiz) {
+                log("[LinkedIn] Skipped quiz successfully. Loading next lesson...", "success");
+                await new Promise(r => setTimeout(r, 2000));
+                continue;
+            }
+
+            const toc = scanLinkedInTOC();
+            const total = toc.totalCount > 0 ? toc.totalCount : 1;
+            const completed = toc.completedCount;
+            const currentTitle = toc.activeItem ? toc.activeItem.title : (document.title || "Video Lesson");
+
+            updateProgress(completed, total, currentTitle);
+            updateStatus(`[${completed}/${total}] ${currentTitle}`);
+            showOnScreenHUD(`⚡ [${completed + 1}/${total}] ${currentTitle.substring(0, 30)}...`, "working");
+
+            if (toc.uncompletedVideos.length === 0 && loopSafety > 1) {
+                log("🎉 All videos in this LinkedIn Learning course are completed (100%)!");
+                showOnScreenHUD("🎉 Entire Course Completed 100%!", "success");
+                break;
+            }
+
+            log(`[LinkedIn] Playing: "${currentTitle}" at ${currentLinkedInSpeed}x...`);
+            const playSuccess = await playLinkedInVideoToCompletion(currentLinkedInSpeed);
+
+            if (globalState.abortRequested) {
+                log("[LinkedIn] Video completion aborted by user.");
+                break;
+            }
+
+            if (singleOnly) {
+                log(`[LinkedIn] Single video completion finished.`);
+                showOnScreenHUD("🎉 Video Completed!", "success");
+                break;
+            }
+
+            log("[LinkedIn] Waiting 1.0s for completion telemetry handshake...");
+            showOnScreenHUD("✓ Telemetry Syncing...", "working");
+            await new Promise(r => setTimeout(r, 1000));
+
+            const updatedToc = scanLinkedInTOC();
+            updateProgress(updatedToc.completedCount, updatedToc.totalCount, "Advancing...");
+
+            if (updatedToc.uncompletedVideos.length === 0) {
+                log("🎉 Entire course is now 100% completed!");
+                showOnScreenHUD("🎉 Entire Course Completed (100%)!", "success");
+                break;
+            }
+
+            const advanced = await advanceToNextLinkedInVideo();
+            if (!advanced) {
+                log("[LinkedIn] No further video lessons found. Course completed!");
+                showOnScreenHUD("🎉 Course Completed!", "success");
+                break;
+            }
+
+            log("[LinkedIn] Loading next video lesson...");
+            await new Promise(r => setTimeout(r, 2000));
+        }
+
+        if (globalState.abortRequested) {
+            updateStatus("Process aborted.");
+            showOnScreenHUD("Process Aborted", "warning");
+        } else {
+            updateStatus("Done! All LinkedIn Learning videos completed.");
+        }
+
+    } catch (e) {
+        log(`[LinkedIn Error] ${e.message}`, "error");
+        updateStatus(`Error: ${e.message}`);
+        showOnScreenHUD(`Error: ${e.message}`, "error");
+    } finally {
+        await chrome.storage.local.remove([
+            'linkedinQueueRunning',
+            'linkedinTargetSpeed'
+        ]).catch(() => {});
+
+        stopLinkedInVideoPlayback();
+
+        setTimeout(() => {
+            hideOnScreenHUD();
+        }, 4000);
+
+        chrome.runtime.sendMessage({ action: "finished" }).catch(() => {});
+    }
+}
+
+// Auto-Resume Persistent Master Chronological Queue, App Queue, or LinkedIn Learning Queue on Page Load
 (async () => {
     try {
         const data = await chrome.storage.local.get([
             'masterCourseQueue', 'masterCourseIndex',
-            'activeAppQueue', 'appQueueIndex'
+            'activeAppQueue', 'appQueueIndex',
+            'linkedinQueueRunning', 'linkedinTargetSpeed'
         ]);
 
         // 1. Check Master Chronological Course Queue
@@ -5193,6 +6053,26 @@ Strict Safety & Style Guidelines:
             }
             await new Promise(r => setTimeout(r, 60));
             await processCurrentAppQueueStep();
+            return;
+        }
+
+        // 3. Check LinkedIn Learning Video Queue
+        if (data.linkedinQueueRunning) {
+            log("[LinkedIn Auto-Resume] Resuming LinkedIn Learning video queue on new lesson...");
+            globalState.isRunning = true;
+            globalState.currentAction = "linkedin_video";
+
+            if (document.readyState !== 'complete') {
+                await new Promise(r => window.addEventListener('load', r, { once: true }));
+            }
+            await new Promise(r => setTimeout(r, 600));
+
+            // Check if current page is quiz upon reload
+            await skipLinkedInQuizIfPresent();
+
+            await startLinkedInCourseCompletionProcess({ 
+                speed: data.linkedinTargetSpeed || 16.0 
+            });
         }
     } catch(e) {
         console.log("Notice in queue auto-resume:", e);

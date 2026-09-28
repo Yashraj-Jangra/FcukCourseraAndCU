@@ -548,6 +548,35 @@ concurrencyPills.forEach(pill => {
 const linkedinStartPathBtn = document.getElementById('linkedinStartPathBtn');
 if (linkedinStartPathBtn) {
     linkedinStartPathBtn.addEventListener('click', async () => {
+        // If context not ready or courses empty, attempt an immediate live rescan of the active tab first
+        if (!detectedLinkedInContext || !detectedLinkedInContext.courses || detectedLinkedInContext.courses.length === 0) {
+            document.getElementById('status').innerText = "Scanning Learning Path content...";
+            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (activeTab && activeTab.id) {
+                try {
+                    const freshCtx = await new Promise((resolve) => {
+                        sendTabMessageWithAutoInject(activeTab.id, { action: "get_linkedin_context" }, (resp) => {
+                            resolve(resp);
+                        });
+                    });
+                    if (freshCtx && freshCtx.isPathPage && freshCtx.courses && freshCtx.courses.length > 0) {
+                        detectedLinkedInContext = freshCtx;
+                        const remaining = (freshCtx.totalCourses || 0) - (freshCtx.completedCourses || 0);
+                        const subEl = document.getElementById('linkedinContextSub');
+                        if (subEl) subEl.innerText = `${freshCtx.totalCourses || 0} items • ${freshCtx.completedCourses || 0} completed • ${remaining} remaining`;
+                        renderPathWorkerState({
+                            isRunning: false,
+                            courses: freshCtx.courses,
+                            totalCourses: freshCtx.totalCourses,
+                            completedCourses: freshCtx.completedCourses,
+                            maxConcurrency: 3,
+                            activeWorkerCount: 0
+                        });
+                    }
+                } catch(e) {}
+            }
+        }
+
         if (!detectedLinkedInContext || !detectedLinkedInContext.courses || detectedLinkedInContext.courses.length === 0) {
             document.getElementById('status').innerText = "No courses detected in this Learning Path.";
             return;
@@ -774,60 +803,71 @@ document.getElementById('readBtn').addEventListener('click', async () => {
             });
         });
 
-        // Query active tab context (Learning Path vs Single Course)
-        sendTabMessageWithAutoInject(tab.id, { action: "get_linkedin_context" }, (ctx) => {
-            if (!ctx) return;
-            detectedLinkedInContext = ctx;
+        // Query active tab context (Learning Path vs Single Course) with auto-retry
+        const queryTabContext = (retryCount = 0) => {
+            sendTabMessageWithAutoInject(tab.id, { action: "get_linkedin_context" }, (ctx) => {
+                if (!ctx) return;
+                detectedLinkedInContext = ctx;
 
-            const titleEl = document.getElementById('linkedinContextTitle');
-            const tagEl = document.getElementById('linkedinContextTag');
-            const subEl = document.getElementById('linkedinContextSub');
-            const switchBtn = document.getElementById('linkedinSwitchPathBtn');
+                const titleEl = document.getElementById('linkedinContextTitle');
+                const tagEl = document.getElementById('linkedinContextTag');
+                const subEl = document.getElementById('linkedinContextSub');
+                const switchBtn = document.getElementById('linkedinSwitchPathBtn');
 
-            if (ctx.isPathPage) {
-                // User is viewing a Learning Path!
-                if (pathControls) pathControls.style.display = 'block';
-                if (courseControls) courseControls.style.display = 'none';
-                if (titleEl) titleEl.innerText = ctx.pathTitle || "Learning Path";
-                if (tagEl) {
-                    tagEl.innerText = "Learning Path";
-                    tagEl.className = "context-tag";
-                }
-                const remaining = (ctx.totalCourses || 0) - (ctx.completedCourses || 0);
-                if (subEl) subEl.innerText = `${ctx.totalCourses || 0} items • ${ctx.completedCourses || 0} completed • ${remaining} remaining`;
-                if (switchBtn) switchBtn.style.display = 'none';
-
-                // Initial render of detected courses list in tray
-                renderPathWorkerState({
-                    isRunning: false,
-                    courses: ctx.courses,
-                    totalCourses: ctx.totalCourses,
-                    completedCourses: ctx.completedCourses,
-                    maxConcurrency: 3,
-                    activeWorkerCount: 0
-                });
-            } else {
-                // User is viewing a Single Course
-                if (pathControls) pathControls.style.display = 'none';
-                if (courseControls) courseControls.style.display = 'block';
-                if (titleEl) titleEl.innerText = ctx.courseTitle || "Single Course";
-                if (tagEl) {
-                    tagEl.innerText = "Single Course";
-                    tagEl.className = "context-tag single";
-                }
-                if (subEl) subEl.innerText = `${ctx.completedVideos || 0}/${ctx.totalVideos || 0} videos watched`;
-
-                if (ctx.hasParentPath && ctx.parentPathUrl) {
-                    if (switchBtn) {
-                        switchBtn.style.display = 'inline-block';
-                        switchBtn.innerText = "View Path →";
-                        switchBtn.title = ctx.parentPathTitle || "Open Parent Learning Path";
+                if (ctx.isPathPage) {
+                    // User is viewing a Learning Path!
+                    if (pathControls) pathControls.style.display = 'block';
+                    if (courseControls) courseControls.style.display = 'none';
+                    if (titleEl) titleEl.innerText = ctx.pathTitle || "Learning Path";
+                    if (tagEl) {
+                        tagEl.innerText = "Learning Path";
+                        tagEl.className = "context-tag";
                     }
-                } else {
+
+                    // If React DOM is still mounting courses, retry after 500ms
+                    if ((!ctx.courses || ctx.courses.length === 0) && retryCount < 3) {
+                        if (subEl) subEl.innerText = "Scanning Learning Path items...";
+                        setTimeout(() => queryTabContext(retryCount + 1), 500);
+                        return;
+                    }
+
+                    const remaining = (ctx.totalCourses || 0) - (ctx.completedCourses || 0);
+                    if (subEl) subEl.innerText = `${ctx.totalCourses || 0} items • ${ctx.completedCourses || 0} completed • ${remaining} remaining`;
                     if (switchBtn) switchBtn.style.display = 'none';
+
+                    // Initial render of detected courses list in tray
+                    renderPathWorkerState({
+                        isRunning: false,
+                        courses: ctx.courses,
+                        totalCourses: ctx.totalCourses,
+                        completedCourses: ctx.completedCourses,
+                        maxConcurrency: 3,
+                        activeWorkerCount: 0
+                    });
+                } else {
+                    // User is viewing a Single Course
+                    if (pathControls) pathControls.style.display = 'none';
+                    if (courseControls) courseControls.style.display = 'block';
+                    if (titleEl) titleEl.innerText = ctx.courseTitle || "Single Course";
+                    if (tagEl) {
+                        tagEl.innerText = "Single Course";
+                        tagEl.className = "context-tag single";
+                    }
+                    if (subEl) subEl.innerText = `${ctx.completedVideos || 0}/${ctx.totalVideos || 0} videos watched`;
+
+                    if (ctx.hasParentPath && ctx.parentPathUrl) {
+                        if (switchBtn) {
+                            switchBtn.style.display = 'inline-block';
+                            switchBtn.innerText = "View Path →";
+                            switchBtn.title = ctx.parentPathTitle || "Open Parent Learning Path";
+                        }
+                    } else {
+                        if (switchBtn) switchBtn.style.display = 'none';
+                    }
                 }
-            }
-        });
+            });
+        };
+        queryTabContext(0);
     } else if (isCoursera) {
         if (linkedinSection) linkedinSection.style.display = 'none';
         if (courseraSection) courseraSection.style.display = 'block';

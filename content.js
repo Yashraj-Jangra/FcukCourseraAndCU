@@ -5414,7 +5414,7 @@ function scanLinkedInLearningPath() {
 
     // Strict blacklist of non-course URL slugs to NEVER open navigation or profile pages
     const NON_COURSE_SLUGS = new Set([
-        'paths', 'career-paths', 'career-hub', 'career-plan',
+        'career-hub', 'career-plan',
         'me', 'my-content', 'in-progress', 'saved', 'history',
         'topics', 'search', 'feed', 'subscription', 'certificates',
         'certifications', 'instructors', 'settings', 'help',
@@ -5423,20 +5423,29 @@ function scanLinkedInLearningPath() {
         'notifications', 'messaging'
     ]);
 
-    // Helper: is link inside navigation/sidebar/header/footer?
+    // Helper: is link inside global navigation/sidebar/header/footer?
     const isNavigationElement = (el) => {
         return !!el.closest(
-            'nav, aside, header, footer, ' +
-            '[role="navigation"], [role="banner"], ' +
-            '.global-nav, .sidebar, [class*="sidebar" i], ' +
-            '[class*="navigation" i], [class*="nav-" i], ' +
-            '#app-header, .app-header, ' +
-            '[data-control-name*="nav" i], ' +
-            '.learning-career-hub-nav, [class*="career-hub-nav" i]'
+            '#app-header, .global-nav, .learning-career-hub-nav, [class*="career-hub-nav" i], ' +
+            'nav[aria-label*="Primary" i], nav[aria-label*="Side" i], ' +
+            'footer, [role="banner"]'
         );
     };
 
-    // Locate the "Content in this Learning Path" section container specifically
+    // Expand any collapsed sections or see-more buttons in the path
+    try {
+        const expandButtons = Array.from(document.querySelectorAll(
+            'button[aria-expanded="false"], ' +
+            'button[class*="show-more" i], ' +
+            'button[class*="see-more" i], ' +
+            'button[class*="expand" i]'
+        ));
+        expandButtons.forEach(btn => {
+            if (!isNavigationElement(btn)) btn.click();
+        });
+    } catch(e) {}
+
+    // Multi-tier detection: First find the specific "Content in this Learning Path" container
     let contentContainer = null;
     const allHeadings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, div, span, p, section'));
     for (const h of allHeadings) {
@@ -5445,39 +5454,74 @@ function scanLinkedInLearningPath() {
             text.startsWith('content in this learning path') || 
             text.startsWith('content in this path') || 
             text.startsWith('content in this career path')) {
-            contentContainer = h.closest('section, [class*="section"], [class*="content"], [class*="learning-path"]') || h.parentElement;
-            break;
+            // Walk up to find the container holding syllabus items
+            let cur = h.parentElement;
+            while (cur && cur !== document.body && cur !== document.documentElement) {
+                const links = cur.querySelectorAll('a[href*="/learning/"], a[href]');
+                if (links.length >= 2) {
+                    contentContainer = cur;
+                    break;
+                }
+                cur = cur.parentElement;
+            }
+            if (contentContainer) break;
         }
     }
 
-    if (!contentContainer) {
-        contentContainer = document.querySelector('main, [role="main"], #main-content') || document.body;
+    // Collect candidate links (prioritize links inside contentContainer if found)
+    let candidateLinks = [];
+    if (contentContainer) {
+        candidateLinks = Array.from(contentContainer.querySelectorAll('a[href*="/learning/"], a[href]'));
+    }
+    if (candidateLinks.length === 0) {
+        candidateLinks = Array.from(document.querySelectorAll(
+            'a[href*="/learning/"], a[href^="/learning/"], [data-test-learning-path-item] a, [class*="learning-path-item"] a, .content-entity-card a'
+        ));
     }
 
-    // Find all links to /learning/ inside the learning path content container
-    const candidateLinks = Array.from(contentContainer.querySelectorAll('a[href*="/learning/"]'));
     const itemMap = new Map();
 
     for (const link of candidateLinks) {
         try {
-            if (isNavigationElement(link)) continue;
+            // If link is inside the identified contentContainer, it is definitely syllabus content, not global nav!
+            const isInsideSyllabus = contentContainer && contentContainer.contains(link);
+            if (!isInsideSyllabus && isNavigationElement(link)) {
+                continue;
+            }
 
-            // Ignore header actions like "Resume", "Start", "Bookmark", "Share"
-            if (link.closest('.learning-path-header, [class*="header__actions"], [class*="hero"]')) {
+            // Ignore top header actions like "Resume", "Start", "Bookmark", "Share"
+            if (link.closest('.learning-path-header, [class*="header__actions" i], [class*="hero" i]')) {
+                continue;
+            }
+
+            const linkText = (link.innerText || '').trim().toLowerCase();
+            if (linkText === 'resume' || linkText === 'start' || linkText === 'share' || linkText === 'bookmark' || linkText === 'add to profile') {
                 continue;
             }
 
             const rawHref = link.getAttribute('href') || link.href;
-            if (!rawHref) continue;
+            if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) continue;
 
             const urlObj = new URL(rawHref, window.location.origin);
             const pathname = urlObj.pathname.toLowerCase();
-            const segments = pathname.split('/').filter(Boolean);
 
+            // Ignore links that match the current learning path URL exactly (e.g. self links or breadcrumbs)
+            if (pathname === window.location.pathname.toLowerCase()) continue;
+
+            // Exclude author and instructor profile links
+            if (pathname.includes('/in/') || pathname.includes('/instructors/')) continue;
+
+            const segments = pathname.split('/').filter(Boolean);
             if (segments.length < 2 || segments[0] !== 'learning') continue;
 
-            const firstSlug = segments[1];
-            if (NON_COURSE_SLUGS.has(firstSlug)) continue;
+            // If link is /learning/paths/... or /learning/career-paths/...:
+            if (segments[1] === 'paths' || segments[1] === 'career-paths') {
+                // Must have at least 4 segments to be an actual item (e.g. /learning/paths/<path>/<item>)
+                if (segments.length < 4) continue;
+            } else {
+                const firstSlug = segments[1];
+                if (NON_COURSE_SLUGS.has(firstSlug)) continue;
+            }
 
             // Preserve enterprise SSO parameter 'u' (e.g. ?u=92961692 for Chandigarh University)
             const cleanParams = new URLSearchParams();
@@ -5488,7 +5532,8 @@ function scanLinkedInLearningPath() {
             }
             const cleanQuery = cleanParams.toString() ? `?${cleanParams.toString()}` : '';
             const canonicalUrl = `${window.location.origin}${urlObj.pathname}${cleanQuery}`;
-            const dedupeKey = urlObj.pathname.toLowerCase();
+            const itemSlug = segments[segments.length - 1];
+            const dedupeKey = itemSlug;
 
             // Locate parent card container
             const card = link.closest(
@@ -5497,7 +5542,7 @@ function scanLinkedInLearningPath() {
                 '.base-card, [class*="base-card"], ' +
                 'li[class*="path-course"], li[class*="course-item"], ' +
                 'li, article, [class*="card"], [class*="item"]'
-            ) || link;
+            ) || link.parentElement || link;
 
             // Card text and ARIA
             const cardText = (card.innerText || '').toLowerCase();
@@ -5540,7 +5585,7 @@ function scanLinkedInLearningPath() {
                 .trim();
 
             if (!title || title.length < 2) {
-                title = segments[segments.length - 1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                title = itemSlug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             }
 
             // Extract duration if present (e.g. 1h 13m, 3m 18s)
@@ -5568,11 +5613,11 @@ function scanLinkedInLearningPath() {
                 isCompleted = true;
             }
 
-            // Deduplicate by clean pathname so multiple links in one card resolve into a single item
+            // Deduplicate by clean itemSlug so multiple links in one card resolve into a single item
             if (!itemMap.has(dedupeKey)) {
                 itemMap.set(dedupeKey, {
                     id: `item_${dedupeKey.replace(/[^a-z0-9]/gi, '_')}`,
-                    slug: segments[segments.length - 1],
+                    slug: itemSlug,
                     index: itemMap.size + 1,
                     title: title,
                     itemType: itemType,

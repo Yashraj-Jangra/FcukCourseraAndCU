@@ -2,6 +2,23 @@
 
 ## Session Summary (2026-09-28)
 
+- 🐛 **Fix Learning Path Course Detection Trap & Add Live Rescan Fallback (`content.js`, `popup.js`)**:
+  - **Root Cause Analysis ("No courses detected in this Learning Path")**:
+    1. **Heading Tag Trap**: `scanLinkedInLearningPath()` previously used `h.closest('section, [class*="section"], [class*="content"], [class*="learning-path"]')` starting from the `"Content in this Learning Path"` `<h2>` heading. Because the `<h2>` tag had class names containing `"content"` (e.g. `content-title`), `h.closest(...)` resolved to the `<h2>` tag itself. Consequently, querying `contentContainer.querySelectorAll('a[href*="/learning/"]')` searched inside the heading element, returning 0 links.
+    2. **Overly Broad Navigation Filter**: `isNavigationElement()` checked `[class*="nav-" i]`, `[class*="navigation" i]`, `nav`, and `aside`. In LinkedIn Career Hub, syllabus containers or layout wrappers often contain `nav` or `aside`, causing syllabus course links to be falsely rejected as navigation.
+    3. **Paths Slug Collateral Block**: `NON_COURSE_SLUGS` included `'paths'` and `'career-paths'`. When an item's URL was formatted as `/learning/paths/<path-slug>/<course-slug>`, checking `NON_COURSE_SLUGS.has(segments[1])` unconditionally dropped valid courses.
+    4. **Premature Context Query Without Re-scan**: If the popup opened while LinkedIn's React framework was still hydrating syllabus elements, `popup.js` received `courses: []` and showed an error on click without attempting an active re-scan.
+  - **Multi-Tier Container Detection (`content.js`)**:
+    - Walks up `cur.parentElement` from the heading until a container holding multiple candidate links is found.
+    - Exempts any element inside `contentContainer` from global navigation checks.
+    - Scopes `isNavigationElement()` strictly to `#app-header`, `.global-nav`, `.learning-career-hub-nav`, and primary/side navigation rails.
+  - **Hierarchical Path Slug Handling (`content.js`)**:
+    - Allows `/learning/paths/...` and `/learning/career-paths/...` links when `segments.length >= 4` (valid item within path), while excluding path roots (`segments.length < 4`) and exact self-links (`pathname === currentPathname`).
+    - Deduplicates by clean `itemSlug`, seamlessly unifying multiple links pointing to the same course.
+  - **Live Rescan & Retry Loop (`popup.js`)**:
+    - Added an automatic retry loop (up to 3 retries, 500ms delay) on popup load if `ctx.isPathPage` is true but React DOM has not yet mounted course items.
+    - Added an immediate live rescan in `#linkedinStartPathBtn` click listener: queries `get_linkedin_context` from the active tab on-demand before showing any error.
+
 - 🐛 **Fix Learning Path Card Scanner, SSO Parameter Stripping & Navigation Tab Hijacking (`content.js`, `background.js`, `popup.js`)**:
   - **Root Cause Analysis**:
     - Discovered why worker tabs were opening "Settings | LinkedIn", "Career Path...", and "Your In Progress...":

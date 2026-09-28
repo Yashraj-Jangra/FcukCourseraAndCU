@@ -40,6 +40,9 @@ let pathOrchestrator = {
     throttleNoticeTimeout: null
 };
 
+let isDispatchingWorkers = false;
+const initializedWorkerTabIds = new Set();
+
 function getSerializablePathState() {
     return {
         isRunning: pathOrchestrator.isRunning,
@@ -49,6 +52,7 @@ function getSerializablePathState() {
         maxConcurrency: pathOrchestrator.maxConcurrency,
         targetSpeed: pathOrchestrator.targetSpeed,
         activeWorkerCount: pathOrchestrator.activeWorkers.size,
+        activeWorkerMap: Array.from(pathOrchestrator.activeWorkers.entries()),
         totalCourses: pathOrchestrator.courses.length,
         completedCourses: pathOrchestrator.courses.filter(c => c.status === 'completed').length,
         smartConcurrency: pathOrchestrator.smartConcurrency,
@@ -88,8 +92,8 @@ function broadcastPathProgress() {
     });
 }
 
-// Restore saved settings & active queue on service worker wake
-chrome.storage.local.get(['linkedinPathState', 'linkedinPathConcurrency'], (res) => {
+// Restore saved settings & active queue on service worker wake with live tab audit
+chrome.storage.local.get(['linkedinPathState', 'linkedinPathConcurrency', 'linkedinWorkerTabIds'], async (res) => {
     if (res.linkedinPathConcurrency) {
         pathOrchestrator.maxConcurrency = parseInt(res.linkedinPathConcurrency, 10) || 3;
     }
@@ -99,15 +103,78 @@ chrome.storage.local.get(['linkedinPathState', 'linkedinPathConcurrency'], (res)
         pathOrchestrator.courses = res.linkedinPathState.courses || [];
         pathOrchestrator.targetSpeed = res.linkedinPathState.targetSpeed || 16.0;
         pathOrchestrator.isRunning = true;
+        pathOrchestrator.smartConcurrency = res.linkedinPathState.smartConcurrency !== false;
         pathOrchestrator.activeWorkers = new Map();
-        // Reset running to queued so they re-dispatch cleanly
+
+        const storedWorkerMap = res.linkedinPathState.activeWorkerMap || [];
+        const verifiedWorkerTabIds = new Set();
+
+        // 1. Audit active workers from stored map: verify which tabs are actually alive in Chrome
+        for (const [tabId, courseId] of storedWorkerMap) {
+            try {
+                const tab = await chrome.tabs.get(tabId);
+                if (tab) {
+                    pathOrchestrator.activeWorkers.set(tabId, courseId);
+                    initializedWorkerTabIds.add(tabId);
+                    verifiedWorkerTabIds.add(tabId);
+                    const course = pathOrchestrator.courses.find(c => c.id === courseId);
+                    if (course) {
+                        course.status = 'running';
+                        course.tabId = tabId;
+                    }
+                }
+            } catch (e) {
+                // Tab no longer exists in Chrome
+                const course = pathOrchestrator.courses.find(c => c.id === courseId);
+                if (course && course.status === 'running') {
+                    course.status = 'queued';
+                    course.tabId = null;
+                    course.currentItem = 'Queued';
+                }
+            }
+        }
+
+        // 2. Also check any orphan tabs in linkedinWorkerTabIds that are not part of activeWorkers
+        const storedTabIds = res.linkedinWorkerTabIds || [];
+        for (const tid of storedTabIds) {
+            if (!verifiedWorkerTabIds.has(tid)) {
+                // Orphan worker tab left behind: close it to prevent tab leakage
+                chrome.tabs.remove(tid).catch(() => {});
+            }
+        }
+        await chrome.storage.local.set({ linkedinWorkerTabIds: Array.from(verifiedWorkerTabIds) });
+
+        // 3. For any courses marked 'running' whose tabs died, reset to 'queued'
         pathOrchestrator.courses.forEach(c => {
-            if (c.status === 'running') {
+            if (c.status === 'running' && (!c.tabId || !pathOrchestrator.activeWorkers.has(c.tabId))) {
                 c.status = 'queued';
                 c.tabId = null;
+                c.currentItem = 'Queued';
             }
         });
-        dispatchNextPathWorkers();
+
+        // 4. Clamp excess workers if any exceed maxConcurrency
+        while (pathOrchestrator.activeWorkers.size > pathOrchestrator.maxConcurrency) {
+            const [excessTabId, courseId] = Array.from(pathOrchestrator.activeWorkers.entries()).pop();
+            pathOrchestrator.activeWorkers.delete(excessTabId);
+            initializedWorkerTabIds.delete(excessTabId);
+            untrackWorkerTabId(excessTabId);
+            chrome.tabs.remove(excessTabId).catch(() => {});
+            const course = pathOrchestrator.courses.find(c => c.id === courseId);
+            if (course && course.status === 'running') {
+                course.status = 'queued';
+                course.tabId = null;
+                course.currentItem = 'Queued';
+            }
+        }
+
+        savePathState();
+        broadcastPathProgress();
+
+        // 5. Only dispatch if available slots exist
+        if (pathOrchestrator.activeWorkers.size < pathOrchestrator.maxConcurrency) {
+            dispatchNextPathWorkers();
+        }
     }
 });
 
@@ -125,10 +192,26 @@ function injectMainWorldAntiPauseAndSpeed(targetTabId, speed = 16.0) {
             try {
                 window.__fcukLinkedInTargetSpeed = targetSpeed;
                 window.__fcukLinkedInSpeedActive = true;
+                window.__fcukExplicitPause = false;
 
-                // 1. Anti-Pause: Spoof Page Visibility API so background tabs never pause
+                // 1. Anti-Pause: Spoof Page Visibility & Focus APIs on Document.prototype AND document
                 if (!window.__fcukVisibilityPatched) {
                     window.__fcukVisibilityPatched = true;
+
+                    try {
+                        Object.defineProperty(Document.prototype, 'visibilityState', {
+                            get: () => 'visible',
+                            configurable: true
+                        });
+                        Object.defineProperty(Document.prototype, 'hidden', {
+                            get: () => false,
+                            configurable: true
+                        });
+                        Object.defineProperty(Document.prototype, 'hasFocus', {
+                            value: () => true,
+                            configurable: true
+                        });
+                    } catch(e) {}
 
                     try {
                         Object.defineProperty(document, 'visibilityState', {
@@ -145,18 +228,77 @@ function injectMainWorldAntiPauseAndSpeed(targetTabId, speed = 16.0) {
                         });
                     } catch(e) {}
 
-                    // Block visibilitychange & blur events from triggering player pause handlers
+                    // Block visibilitychange, blur, focusout, and pagehide from triggering pause handlers
                     const stopImmediate = (e) => {
                         e.stopImmediatePropagation();
                     };
-                    window.addEventListener('visibilitychange', stopImmediate, true);
-                    document.addEventListener('visibilitychange', stopImmediate, true);
-                    window.addEventListener('blur', stopImmediate, true);
-                    document.addEventListener('blur', stopImmediate, true);
-                    window.addEventListener('pagehide', stopImmediate, true);
+                    ['visibilitychange', 'webkitvisibilitychange', 'blur', 'focusout', 'pagehide'].forEach(evt => {
+                        window.addEventListener(evt, stopImmediate, true);
+                        document.addEventListener(evt, stopImmediate, true);
+                    });
+
+                    // Neutralize window.onblur and document.onvisibilitychange setters if LinkedIn uses them
+                    try {
+                        Object.defineProperty(window, 'onblur', { get: () => null, set: () => {}, configurable: true });
+                        Object.defineProperty(document, 'onvisibilitychange', { get: () => null, set: () => {}, configurable: true });
+                    } catch(e) {}
                 }
 
-                // 2. Override HTMLMediaElement.prototype.playbackRate
+                // 2. Intercept HTMLMediaElement.prototype.pause: Suppress LinkedIn blur/focusout auto-pause
+                if (!window.__fcukPausePatched) {
+                    window.__fcukPausePatched = true;
+                    const origPause = HTMLMediaElement.prototype.pause;
+                    window.__fcukOriginalPause = origPause;
+                    HTMLMediaElement.prototype.pause = function(...args) {
+                        // Suppress pauses while turbo speed is active, unless explicitly requested or video ended
+                        if (window.__fcukLinkedInSpeedActive && !this.ended && !window.__fcukExplicitPause) {
+                            return Promise.resolve();
+                        }
+                        return origPause.apply(this, args);
+                    };
+                }
+
+                // 3. Intercept HTMLMediaElement.prototype.play: Ensure video is always muted for Autoplay Policy
+                if (!window.__fcukPlayPatched) {
+                    window.__fcukPlayPatched = true;
+                    const origPlay = HTMLMediaElement.prototype.play;
+                    window.__fcukOriginalPlay = origPlay;
+                    HTMLMediaElement.prototype.play = function(...args) {
+                        if (window.__fcukLinkedInSpeedActive) {
+                            this.muted = true;
+                            this.defaultMuted = true;
+                            this.volume = 0;
+                        }
+                        return origPlay.apply(this, args);
+                    };
+                }
+
+                // 4. requestAnimationFrame Fallback for background tab throttling
+                if (!window.__fcukRafPatched) {
+                    window.__fcukRafPatched = true;
+                    const origRaf = window.requestAnimationFrame.bind(window);
+                    window.__fcukOriginalRaf = origRaf;
+                    window.requestAnimationFrame = function(cb) {
+                        let executed = false;
+                        let timerId = null;
+                        const wrappedCb = (timestamp) => {
+                            if (!executed) {
+                                executed = true;
+                                if (timerId) clearTimeout(timerId);
+                                cb(timestamp);
+                            }
+                        };
+                        timerId = setTimeout(() => {
+                            if (!executed) {
+                                executed = true;
+                                cb(performance.now());
+                            }
+                        }, 33); // ~30 FPS fallback when Chromium halts rAF in background tabs
+                        return origRaf(wrappedCb);
+                    };
+                }
+
+                // 5. Override HTMLMediaElement.prototype.playbackRate
                 if (!window.__fcukPlaybackRatePatched) {
                     window.__fcukPlaybackRatePatched = true;
                     const originalDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
@@ -182,7 +324,7 @@ function injectMainWorldAntiPauseAndSpeed(targetTabId, speed = 16.0) {
                     });
                 }
 
-                // 3. Override HTMLMediaElement.prototype.defaultPlaybackRate
+                // 6. Override HTMLMediaElement.prototype.defaultPlaybackRate
                 if (!window.__fcukDefaultPlaybackRatePatched) {
                     window.__fcukDefaultPlaybackRatePatched = true;
                     const origDefaultDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'defaultPlaybackRate');
@@ -201,7 +343,7 @@ function injectMainWorldAntiPauseAndSpeed(targetTabId, speed = 16.0) {
                     }
                 }
 
-                // 4. Helper to enforce high-speed playback, mute, and unpause on video elements
+                // 7. Helper to enforce high-speed playback, mute, and unpause on video elements
                 const enforceOnVideo = (v) => {
                     if (!v || !window.__fcukLinkedInSpeedActive) return;
                     try {
@@ -264,6 +406,7 @@ async function closeAllOldWorkerTabs(excludeTabId = null) {
         for (const tid of storedIds) {
             if (tid && tid !== excludeTabId) {
                 chrome.tabs.remove(tid).catch(() => {});
+                initializedWorkerTabIds.delete(tid);
             }
         }
         await chrome.storage.local.set({ linkedinWorkerTabIds: [] });
@@ -274,24 +417,44 @@ async function closeAllOldWorkerTabs(excludeTabId = null) {
         for (const [tid] of pathOrchestrator.activeWorkers) {
             if (tid && tid !== excludeTabId) {
                 chrome.tabs.remove(tid).catch(() => {});
+                initializedWorkerTabIds.delete(tid);
             }
         }
         pathOrchestrator.activeWorkers.clear();
     }
 }
 
-// Dispatcher: Opens up to maxConcurrency worker tabs in background (STRICT limit)
+// Dispatcher: Opens up to maxConcurrency worker tabs in background (STRICT limit with mutex)
 async function dispatchNextPathWorkers() {
-    if (!pathOrchestrator.isRunning) return;
+    if (isDispatchingWorkers || !pathOrchestrator.isRunning) return;
+    isDispatchingWorkers = true;
 
-    // 1. Audit active workers: Remove any tabs that no longer exist in Chrome
-    for (const [tabId, courseId] of Array.from(pathOrchestrator.activeWorkers.entries())) {
-        try {
-            await chrome.tabs.get(tabId);
-        } catch (e) {
-            // Tab was closed by user or crashed
-            pathOrchestrator.activeWorkers.delete(tabId);
-            untrackWorkerTabId(tabId);
+    try {
+        // 1. Audit active workers: Remove any tabs that no longer exist in Chrome
+        for (const [tabId, courseId] of Array.from(pathOrchestrator.activeWorkers.entries())) {
+            try {
+                await chrome.tabs.get(tabId);
+            } catch (e) {
+                // Tab was closed by user or crashed
+                pathOrchestrator.activeWorkers.delete(tabId);
+                initializedWorkerTabIds.delete(tabId);
+                untrackWorkerTabId(tabId);
+                const course = pathOrchestrator.courses.find(c => c.id === courseId);
+                if (course && course.status === 'running') {
+                    course.status = 'queued';
+                    course.tabId = null;
+                    course.currentItem = 'Queued';
+                }
+            }
+        }
+
+        // 2. Strict concurrency clamp: If active count exceeds maxConcurrency, close excess tabs immediately
+        while (pathOrchestrator.activeWorkers.size > pathOrchestrator.maxConcurrency) {
+            const [excessTabId, courseId] = Array.from(pathOrchestrator.activeWorkers.entries()).pop();
+            pathOrchestrator.activeWorkers.delete(excessTabId);
+            initializedWorkerTabIds.delete(excessTabId);
+            untrackWorkerTabId(excessTabId);
+            chrome.tabs.remove(excessTabId).catch(() => {});
             const course = pathOrchestrator.courses.find(c => c.id === courseId);
             if (course && course.status === 'running') {
                 course.status = 'queued';
@@ -299,65 +462,53 @@ async function dispatchNextPathWorkers() {
                 course.currentItem = 'Queued';
             }
         }
-    }
 
-    // 2. Strict concurrency clamp: If active count exceeds maxConcurrency, close excess tabs immediately
-    while (pathOrchestrator.activeWorkers.size > pathOrchestrator.maxConcurrency) {
-        const [excessTabId, courseId] = Array.from(pathOrchestrator.activeWorkers.entries()).pop();
-        pathOrchestrator.activeWorkers.delete(excessTabId);
-        untrackWorkerTabId(excessTabId);
-        chrome.tabs.remove(excessTabId).catch(() => {});
-        const course = pathOrchestrator.courses.find(c => c.id === courseId);
-        if (course && course.status === 'running') {
-            course.status = 'queued';
-            course.tabId = null;
-            course.currentItem = 'Queued';
+        const runningCount = pathOrchestrator.activeWorkers.size;
+        const availableSlots = pathOrchestrator.maxConcurrency - runningCount;
+
+        if (availableSlots <= 0) return;
+
+        const queuedCourses = pathOrchestrator.courses.filter(c => c.status === 'queued');
+
+        if (queuedCourses.length === 0 && runningCount === 0) {
+            // Entire path completed!
+            pathOrchestrator.isRunning = false;
+            savePathState();
+            chrome.runtime.sendMessage({ 
+                action: "path_all_completed", 
+                pathTitle: pathOrchestrator.pathTitle,
+                state: getSerializablePathState()
+            }).catch(() => {});
+            return;
         }
-    }
 
-    const runningCount = pathOrchestrator.activeWorkers.size;
-    const availableSlots = pathOrchestrator.maxConcurrency - runningCount;
+        const toDispatch = queuedCourses.slice(0, availableSlots);
+        for (const course of toDispatch) {
+            course.status = 'running';
+            course.percent = 0;
+            course.currentItem = "Launching worker...";
 
-    if (availableSlots <= 0) return;
+            try {
+                // Open worker tab in background without stealing focus!
+                const tab = await chrome.tabs.create({ url: course.url, active: false });
+                course.tabId = tab.id;
+                pathOrchestrator.activeWorkers.set(tab.id, course.id);
+                trackWorkerTabId(tab.id);
 
-    const queuedCourses = pathOrchestrator.courses.filter(c => c.status === 'queued');
+                // Prevent tab from being discarded by Chrome
+                await chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {});
+            } catch (e) {
+                console.error("[Path Orchestrator] Failed to spawn worker tab:", e);
+                course.status = 'failed';
+                course.currentItem = "Failed to launch";
+            }
+        }
 
-    if (queuedCourses.length === 0 && runningCount === 0) {
-        // Entire path completed!
-        pathOrchestrator.isRunning = false;
         savePathState();
-        chrome.runtime.sendMessage({ 
-            action: "path_all_completed", 
-            pathTitle: pathOrchestrator.pathTitle,
-            state: getSerializablePathState()
-        }).catch(() => {});
-        return;
+        broadcastPathProgress();
+    } finally {
+        isDispatchingWorkers = false;
     }
-
-    const toDispatch = queuedCourses.slice(0, availableSlots);
-    for (const course of toDispatch) {
-        course.status = 'running';
-        course.percent = 0;
-        course.currentItem = "Launching worker...";
-
-        try {
-            // Open worker tab in background without stealing focus!
-            const tab = await chrome.tabs.create({ url: course.url, active: false });
-            course.tabId = tab.id;
-            pathOrchestrator.activeWorkers.set(tab.id, course.id);
-            trackWorkerTabId(tab.id);
-
-            // Prevent tab from being discarded by Chrome
-            await chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {});
-        } catch (e) {
-            console.error("[Path Orchestrator] Failed to spawn worker tab:", e);
-            course.status = 'failed';
-            course.currentItem = "Failed to launch";
-        }
-    }
-
-    savePathState();
-    broadcastPathProgress();
 }
 
 // Runtime Message Router
@@ -405,6 +556,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 world: 'MAIN',
                 func: function() {
                     window.__fcukLinkedInSpeedActive = false;
+                    window.__fcukExplicitPause = true;
                     window.__fcukLinkedInTargetSpeed = 1.0;
                     document.querySelectorAll('video').forEach(v => {
                         v.muted = false;
@@ -489,6 +641,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         while (pathOrchestrator.activeWorkers.size > conc) {
             const [excessTabId, courseId] = Array.from(pathOrchestrator.activeWorkers.entries()).pop();
             pathOrchestrator.activeWorkers.delete(excessTabId);
+            initializedWorkerTabIds.delete(excessTabId);
             untrackWorkerTabId(excessTabId);
             chrome.tabs.remove(excessTabId).catch(() => {});
             const course = pathOrchestrator.courses.find(c => c.id === courseId);
@@ -574,6 +727,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         if (workerTabId) {
             pathOrchestrator.activeWorkers.delete(workerTabId);
+            initializedWorkerTabIds.delete(workerTabId);
             untrackWorkerTabId(workerTabId);
             // Automatically close completed course tab!
             chrome.tabs.remove(workerTabId).catch(() => {});
@@ -619,6 +773,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             // 1. Immediately close the buffering tab to relieve bandwidth
             if (workerTabId) {
                 pathOrchestrator.activeWorkers.delete(workerTabId);
+                initializedWorkerTabIds.delete(workerTabId);
                 untrackWorkerTabId(workerTabId);
                 chrome.tabs.remove(workerTabId).catch(() => {});
             }
@@ -634,6 +789,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             while (pathOrchestrator.activeWorkers.size > newConc) {
                 const [excessTabId, excessCourseId] = Array.from(pathOrchestrator.activeWorkers.entries()).pop();
                 pathOrchestrator.activeWorkers.delete(excessTabId);
+                initializedWorkerTabIds.delete(excessTabId);
                 untrackWorkerTabId(excessTabId);
                 chrome.tabs.remove(excessTabId).catch(() => {});
                 const c = pathOrchestrator.courses.find(item => item.id === excessCourseId);
@@ -741,6 +897,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             const course = pathOrchestrator.courses.find(c => c.id === courseId);
             if (!course) return;
 
+            // If tab was already initialized, DO NOT re-inject content.js or re-send start_linkedin_videos!
+            // Just ensure MAIN world anti-pause & speed are re-enforced on SPA route transitions
+            if (initializedWorkerTabIds.has(tabId)) {
+                if (changeInfo.url) {
+                    injectMainWorldAntiPauseAndSpeed(tabId, pathOrchestrator.targetSpeed).catch(() => {});
+                }
+                return;
+            }
+
+            initializedWorkerTabIds.add(tabId);
+
             // Wait 1.0s for DOM / React hydration to settle, then inject & launch
             setTimeout(async () => {
                 try {
@@ -788,6 +955,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // Track closed tabs (Worker cleanup & fail-safe)
 chrome.tabs.onRemoved.addListener((tabId) => {
     untrackWorkerTabId(tabId);
+    initializedWorkerTabIds.delete(tabId);
     if (pathOrchestrator.isRunning && pathOrchestrator.activeWorkers.has(tabId)) {
         const courseId = pathOrchestrator.activeWorkers.get(tabId);
         pathOrchestrator.activeWorkers.delete(tabId);

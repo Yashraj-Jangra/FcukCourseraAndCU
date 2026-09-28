@@ -1,5 +1,22 @@
 # FcukCoursera - Development Progress & Status Tracker
 
+## Session Summary (2026-09-29)
+
+- 🐛 **Fix Runaway Tab Accumulation & Enforce Background Video Playback (`background.js`, `content.js`)**:
+  - **Eliminated Runaway Tab Spawning on Service Worker Wakeup (`background.js`)**:
+    - **Root Cause**: Manifest V3 terminates idle service workers every ~30s. Upon wake-up, the storage restore listener previously reset all running courses to `queued`, cleared `activeWorkers`, and called `dispatchNextPathWorkers()`, opening a new batch of 3 tabs while previous worker tabs were still alive in Chrome.
+    - **Live Tab Audit & State Serialization**: `getSerializablePathState` now serializes `activeWorkerMap`. On wake-up, the background worker audits every stored tab via `chrome.tabs.get(tabId)`. If live, it re-binds the course and tab, keeps its `running` state, and cleans up any orphan tabs. Only if `activeWorkers.size < maxConcurrency` does it dispatch next items.
+    - **Dispatch Mutex**: Added `isDispatchingWorkers` mutex to prevent concurrent callers from racing and double-launching tabs.
+    - **Single Tab Initialization Guard**: Tracked `initializedWorkerTabIds`. On SPA route transitions, `chrome.tabs.onUpdated` only refreshes MAIN world anti-pause and speed without re-injecting `content.js` or re-sending `start_linkedin_videos`.
+    - **Suppressed `target="_blank"` & `window.open`**: In `content.js`, stripped `target="_blank"` in `clickNativeElement` and overrode `window.open` in worker tabs so automation clicks never open rogue tabs.
+  - **Enforced Background/Unfocused Tab Video Playback (`background.js`, `content.js`)**:
+    - **Root Cause**: LinkedIn Learning's web player attaches listeners to `window.onblur`, `focusout`, and `visibilitychange` that invoke `HTMLMediaElement.prototype.pause()`. Additionally, Chrome Autoplay Policy rejects unmuted playback in background tabs without user gesture, and Chromium throttles `requestAnimationFrame` down to 0 FPS in unfocused tabs.
+    - **MAIN World Pause Interception**: Intercepted `HTMLMediaElement.prototype.pause`. While turbo automation is active and video has not ended, pause calls triggered by blur/focusout are suppressed.
+    - **Background Autoplay Muting**: Intercepted `HTMLMediaElement.prototype.play` and continuously enforced `muted = true`, `defaultMuted = true`, and `volume = 0`, satisfying Chrome's Autoplay policy for background tabs.
+    - **rAF 33ms Fallback Shim**: Shimmed `window.requestAnimationFrame` with a 33ms `setTimeout` fallback so internal player tick loops continue at ~30 FPS even when Chromium suspends rAF in background tabs.
+    - **Complete Prototype & Instance Focus Spoofing**: Patched both `Document.prototype` and `document` properties (`visibilityState: 'visible'`, `hidden: false`, `hasFocus: () => true`) and stopped immediate propagation of `visibilitychange`, `webkitvisibilitychange`, `blur`, `focusout`, and `pagehide`.
+    - **Timestamp-Based Watchdog**: In `content.js`, replaced iteration-based counting with elapsed timestamp calculations (`now - lastProgressTime`), ensuring precise stall detection and unpause recovery even when Chrome throttles background `setInterval` timers.
+
 ## Session Summary (2026-09-28)
 
 - ✨ **Smart Parallel Tabs: Adaptive Buffer-Pressure Throttling, Tab Teardown & HUD Alert (`background.js`, `content.js`, `popup.html`, `popup.js`)**:

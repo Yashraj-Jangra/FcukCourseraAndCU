@@ -1394,6 +1394,12 @@ function clickNativeElement(element) {
         element.setAttribute('aria-disabled', 'false');
         element.classList.remove('disabled', 'cds-button-disabled', 'btn-disabled');
 
+        // Prevent opening new tabs when automated links are clicked
+        const anchor = (typeof element.closest === 'function') ? element.closest('a') : (element.tagName === 'A' ? element : null);
+        if (anchor && anchor.getAttribute('target') === '_blank') {
+            anchor.setAttribute('target', '_self');
+        }
+
         if (typeof element.scrollIntoView === 'function') {
             element.scrollIntoView({ behavior: 'auto', block: 'center' });
         }
@@ -7220,7 +7226,8 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
     video.addEventListener('ratechange', onRateChange);
 
     let lastTime = video.currentTime;
-    let stuckCount = 0;
+    let lastProgressTime = Date.now();
+    let throttledReducedReported = false;
 
     return new Promise((resolve) => {
         let finished = false;
@@ -7278,9 +7285,14 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
                 }
             }
 
-            // Continuously enforce playback rate and unpause
+            // Continuously enforce playback rate, mute (for Autoplay policy in background), and unpause
             if (video.playbackRate !== currentLinkedInSpeed) {
                 applyLinkedInSpeed(currentLinkedInSpeed);
+            }
+            if (video.muted !== true) {
+                video.muted = true;
+                video.defaultMuted = true;
+                video.volume = 0;
             }
             if (video.paused && !video.ended) {
                 video.play().catch(() => {
@@ -7294,14 +7306,19 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
             const remainingSec = Math.max(0, Math.round((total - curr) / currentLinkedInSpeed));
             showOnScreenHUD(`⚡ ${percent}% (${curr}s/${total}s) • ~${remainingSec}s left at ${currentLinkedInSpeed}x`, "working");
 
-            // STUCK / BUFFERING WATCHDOG: Detect freeze whether playing or paused
+            // STUCK / BUFFERING WATCHDOG: Detect freeze whether playing or paused (timestamp-based)
             const isProgressing = Math.abs(video.currentTime - lastTime) >= 0.05 && !video.paused;
-            if (!isProgressing) {
-                stuckCount++;
+            const now = Date.now();
+
+            if (isProgressing) {
+                lastTime = video.currentTime;
+                lastProgressTime = now;
+                throttledReducedReported = false;
+            } else {
+                const stallMs = now - lastProgressTime;
 
                 // 2.5s stall: nudge currentTime, unpause, and trigger native play
-                if (stuckCount === 10) {
-                    log("[LinkedIn] Buffering stall detected. Nudging video playback...", "warning");
+                if (stallMs >= 2500 && stallMs < 5000) {
                     triggerLinkedInNativePlay(video);
                     if (video.duration > 2 && video.currentTime > 0.5) {
                         video.currentTime += 0.25;
@@ -7309,23 +7326,24 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
                     video.play().catch(() => {});
                 }
                 // 5.0s stall: safe non-destructive video stream recovery
-                else if (stuckCount === 20) {
+                else if (stallMs >= 5000 && stallMs < 6000) {
                     await refreshLinkedInVideo(video);
                 }
-                // 6.0s stall (stuckCount === 24): SMART PARALLEL TABS - Signal buffer pressure to auto-reduce tabs!
-                else if (stuckCount === 24) {
-                    if (isWorkerTab && courseId) {
+                // 6.0s stall: SMART PARALLEL TABS - Signal buffer pressure to auto-reduce tabs!
+                else if (stallMs >= 6000 && stallMs < 8000) {
+                    if (isWorkerTab && courseId && !throttledReducedReported) {
+                        throttledReducedReported = true;
                         log("[LinkedIn] ⚠️ Heavy video buffering detected. Requesting smart orchestrator to auto-reduce active tabs...", "warning");
                         showOnScreenHUD("⚠️ Buffering detected — auto-reducing tabs...", "warning");
                         chrome.runtime.sendMessage({
                             action: "path_worker_buffering_pressure",
                             courseId: courseId,
-                            stuckSeconds: 6
+                            stuckSeconds: Math.round(stallMs / 1000)
                         }).catch(() => {});
                     }
                 }
                 // 8.0s stall: step down speed to 4x to alleviate MSE buffer throttling
-                else if (stuckCount === 32) {
+                else if (stallMs >= 8000 && stallMs < 12000) {
                     if (currentLinkedInSpeed > 4.0) {
                         log("[LinkedIn] Stepping down speed to 4x to alleviate MSE buffer throttling...", "warning");
                         applyLinkedInSpeed(4.0);
@@ -7334,7 +7352,7 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
                     video.play().catch(() => {});
                 }
                 // 12.0s stall: try advancing before reloading
-                else if (stuckCount >= 48) {
+                else if (stallMs >= 12000) {
                     log("[LinkedIn] 🔄 Video player stalled. Checking if lesson completed or advancing...", "warning");
                     if (isCurrentLinkedInLessonCompleted() || await advanceToNextLinkedInVideo()) {
                         cleanup();
@@ -7352,9 +7370,6 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
                     resolve(false);
                     return;
                 }
-            } else {
-                stuckCount = 0;
-                lastTime = video.currentTime;
             }
         }, 250);
     });
@@ -7445,6 +7460,13 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
 
     if (isWorkerTab) {
         startTabKeepAliveHeartbeat();
+        // Prevent worker scripts from creating new tabs via window.open
+        try {
+            window.open = function(url) {
+                if (url) window.location.href = url;
+                return window;
+            };
+        } catch(e) {}
     }
 
     log("==========================================");

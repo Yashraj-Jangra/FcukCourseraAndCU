@@ -2,6 +2,17 @@
 
 ## Session Summary (2026-09-28)
 
+- 🐛 **Add Dedicated Drag Handle to Floating HUD & Eliminate Sticky Hover Drag (`content.js`)**:
+  - **Root Cause**: The entire HUD header was styled with `cursor: grab` and listened for `pointerdown` across all non-button areas without requiring a movement threshold or verifying that a mouse button was actively held down during subsequent cursor movements. As a result, hovering or clicking on the header could leave the HUD in a persistent drag state stuck to the cursor.
+  - **Dedicated Drag Handle (`#hudDragHandle`)**:
+    - Added an explicit `[⠿ Drag]` handle button in the HUD header (`.hud-drag-handle`) with a 6-dot grip icon and label.
+    - Set `.hud-header` to `cursor: default;` and `user-select: none;`. Only `#hudDragHandle` displays `cursor: grab` (and `cursor: grabbing` when active).
+  - **Bulletproof Drag State & Failsafes (`content.js`)**:
+    - Scoped `pointerdown` drag initialization strictly to `#hudDragHandle` (ignoring header clicks, title text, and child controls).
+    - Added a 3px movement threshold (`Math.hypot(dx, dy) >= 3`) before engaging drag state, preventing clicks from triggering accidental movement.
+    - Added `if (e.buttons === 0) { stopDragging(); return; }` to `onPointerMove` and a global window `mousemove` listener. If no mouse button is pressed, drag mode terminates immediately.
+    - All window capture listeners (`pointermove`, `mousemove`, `pointerup`, `mouseup`, `pointercancel`, `blur`) detach cleanly upon pointer release anywhere on screen.
+
 - ⚡ **Strict Concurrency Enforcement & Auto-Closing of Old Worker Tabs (`background.js`, `content.js`)**:
   - **Persistent Worker Tab Registry (`background.js`)**:
     - Implemented `trackWorkerTabId`, `untrackWorkerTabId`, and `closeAllOldWorkerTabs` backed by `linkedinWorkerTabIds` in `chrome.storage.local`.

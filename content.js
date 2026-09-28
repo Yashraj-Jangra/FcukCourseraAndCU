@@ -5772,13 +5772,47 @@ function createLinkedInFloatingHUD() {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
-                padding: 10px 12px;
+                padding: 8px 12px;
                 border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-                cursor: grab;
+                cursor: default;
                 background: rgba(255, 255, 255, 0.02);
+                user-select: none;
             }
             .hud-header:active {
+                cursor: default;
+            }
+            .hud-drag-handle {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                padding: 3px 8px;
+                background: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.14);
+                border-radius: 5px;
+                font-size: 10px;
+                font-weight: 500;
+                color: #a1a1aa;
+                cursor: grab;
+                user-select: none;
+                -webkit-user-select: none;
+                transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+            }
+            .hud-drag-handle:hover {
+                background: rgba(255, 255, 255, 0.14);
+                border-color: rgba(255, 255, 255, 0.28);
+                color: #ffffff;
+            }
+            .hud-drag-handle:active,
+            #fcuk-floating-hud.dragging .hud-drag-handle {
                 cursor: grabbing;
+                background: rgba(2, 132, 199, 0.25);
+                border-color: #38bdf8;
+                color: #38bdf8;
+            }
+            #fcuk-floating-hud.dragging {
+                user-select: none !important;
+                -webkit-user-select: none !important;
+                box-shadow: 0 20px 48px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(56, 189, 248, 0.4);
             }
             .hud-title-box {
                 display: flex;
@@ -5994,7 +6028,18 @@ function createLinkedInFloatingHUD() {
                     <span id="hudPillStats">0/0 done</span>
                 </div>
             </div>
-            <div class="hud-header-actions" style="display: flex; gap: 2px;">
+            <div class="hud-header-actions" style="display: flex; align-items: center; gap: 5px;">
+                <div class="hud-drag-handle" id="hudDragHandle" title="Hold & drag to move HUD">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="8" cy="6" r="2.5"/>
+                        <circle cx="16" cy="6" r="2.5"/>
+                        <circle cx="8" cy="12" r="2.5"/>
+                        <circle cx="16" cy="12" r="2.5"/>
+                        <circle cx="8" cy="18" r="2.5"/>
+                        <circle cx="16" cy="18" r="2.5"/>
+                    </svg>
+                    <span>Drag</span>
+                </div>
                 <button class="hud-btn-icon" id="hudMinimizeBtn" title="Minimize to pill">−</button>
                 <button class="hud-btn-icon" id="hudCloseBtn" title="Close HUD">×</button>
             </div>
@@ -6073,21 +6118,58 @@ function createLinkedInFloatingHUD() {
 }
 
 function initHudDragging(hud) {
-    const header = hud.querySelector('#hudDragHeader');
-    if (!header) return;
+    const dragHandle = hud.querySelector('#hudDragHandle');
+    if (!dragHandle) return;
 
+    let isPointerDown = false;
     let isDragging = false;
     let startX = 0;
     let startY = 0;
     let initialLeft = 0;
     let initialTop = 0;
 
+    const stopDragging = () => {
+        isPointerDown = false;
+        if (isDragging) {
+            isDragging = false;
+            hudDragState.isDragging = false;
+            hud.classList.remove('dragging');
+
+            const rect = hud.getBoundingClientRect();
+            chrome.storage.local.set({
+                fcukHudPosition: { x: Math.round(rect.left), y: Math.round(rect.top) }
+            }).catch(() => {});
+        }
+
+        window.removeEventListener('pointermove', onPointerMove, { capture: true });
+        window.removeEventListener('mousemove', onPointerMove, { capture: true });
+        window.removeEventListener('pointerup', stopDragging, { capture: true });
+        window.removeEventListener('mouseup', stopDragging, { capture: true });
+        window.removeEventListener('pointercancel', stopDragging, { capture: true });
+        window.removeEventListener('blur', stopDragging);
+    };
+
     const onPointerMove = (e) => {
-        if (!isDragging) return;
-        e.preventDefault();
+        // Critical safeguard: if no mouse button is currently held down, abort immediately!
+        if (e.buttons === 0) {
+            stopDragging();
+            return;
+        }
+
+        if (!isPointerDown) return;
 
         const dx = e.clientX - startX;
         const dy = e.clientY - startY;
+
+        // Require at least 3px movement before engaging drag to prevent sticking on clicks
+        if (!isDragging) {
+            if (Math.hypot(dx, dy) < 3) return;
+            isDragging = true;
+            hudDragState.isDragging = true;
+            hud.classList.add('dragging');
+        }
+
+        e.preventDefault();
 
         let newLeft = initialLeft + dx;
         let newTop = initialTop + dy;
@@ -6105,34 +6187,16 @@ function initHudDragging(hud) {
         hud.style.right = 'auto';
     };
 
-    const stopDragging = () => {
-        if (!isDragging) return;
-        isDragging = false;
-        hudDragState.isDragging = false;
-        hud.classList.remove('dragging');
-
-        window.removeEventListener('pointermove', onPointerMove, { capture: true });
-        window.removeEventListener('pointerup', stopDragging, { capture: true });
-        window.removeEventListener('pointercancel', stopDragging, { capture: true });
-        window.removeEventListener('blur', stopDragging);
-
-        const rect = hud.getBoundingClientRect();
-        chrome.storage.local.set({
-            fcukHudPosition: { x: Math.round(rect.left), y: Math.round(rect.top) }
-        }).catch(() => {});
-    };
-
-    header.addEventListener('pointerdown', (e) => {
+    dragHandle.addEventListener('pointerdown', (e) => {
         // Only primary mouse button (left click)
         if (e.button !== 0) return;
-        // Never drag when clicking header buttons or selects
-        if (e.target.closest('.hud-btn-icon') || e.target.closest('button') || e.target.closest('select')) return;
-        // Never drag when minimized (click expands pill)
         if (hud.classList.contains('minimized')) return;
 
-        isDragging = true;
-        hudDragState.isDragging = true;
-        hud.classList.add('dragging');
+        e.preventDefault();
+        e.stopPropagation();
+
+        isPointerDown = true;
+        isDragging = false;
         startX = e.clientX;
         startY = e.clientY;
 
@@ -6140,12 +6204,20 @@ function initHudDragging(hud) {
         initialLeft = rect.left;
         initialTop = rect.top;
 
-        // Capture all pointer movements on the window so rapid dragging never breaks or loses track
         window.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
+        window.addEventListener('mousemove', onPointerMove, { capture: true, passive: false });
         window.addEventListener('pointerup', stopDragging, { capture: true });
+        window.addEventListener('mouseup', stopDragging, { capture: true });
         window.addEventListener('pointercancel', stopDragging, { capture: true });
         window.addEventListener('blur', stopDragging);
     });
+
+    // Global failsafe: if cursor moves anywhere without a button pressed, ensure drag is not stuck
+    window.addEventListener('mousemove', (e) => {
+        if (e.buttons === 0 && (isDragging || isPointerDown)) {
+            stopDragging();
+        }
+    }, { passive: true });
 }
 
 function attachHudControls(hud) {

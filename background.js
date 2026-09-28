@@ -55,10 +55,31 @@ function savePathState() {
 }
 
 function broadcastPathProgress() {
+    const state = getSerializablePathState();
+    // 1. Send to extension views (popup)
     chrome.runtime.sendMessage({
         action: "path_progress_update",
-        state: getSerializablePathState()
+        state: state
     }).catch(() => {});
+
+    // 2. Send to overview tab if known
+    if (pathOrchestrator.overviewTabId) {
+        chrome.tabs.sendMessage(pathOrchestrator.overviewTabId, {
+            action: "path_progress_update",
+            state: state
+        }).catch(() => {});
+    }
+
+    // 3. Broadcast to all active LinkedIn tabs so in-page floating HUD stays in sync
+    chrome.tabs.query({ url: "*://*.linkedin.com/*" }, (tabs) => {
+        if (chrome.runtime.lastError || !tabs) return;
+        tabs.forEach(t => {
+            chrome.tabs.sendMessage(t.id, {
+                action: "path_progress_update",
+                state: state
+            }).catch(() => {});
+        });
+    });
 }
 
 // Restore saved settings & active queue on service worker wake
@@ -345,7 +366,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             maxConcurrency: concurrency,
             targetSpeed: speed,
             activeWorkers: new Map(),
-            overviewTabId: sender && sender.tab ? sender.tab.id : null
+            overviewTabId: (sender && sender.tab ? sender.tab.id : null) || request.overviewTabId || null
         };
 
         savePathState();
@@ -364,10 +385,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const conc = Math.max(1, Math.min(5, parseInt(request.concurrency, 10) || 3));
         pathOrchestrator.maxConcurrency = conc;
         chrome.storage.local.set({ linkedinPathConcurrency: conc });
+        savePathState();
+        broadcastPathProgress();
         if (pathOrchestrator.isRunning) {
             dispatchNextPathWorkers();
         }
         sendResponse({ status: "updated", concurrency: conc });
+        return true;
+    }
+
+    if (request.action === "set_path_speed") {
+        const speed = parseFloat(request.speed) || 16.0;
+        pathOrchestrator.targetSpeed = speed;
+        chrome.storage.local.set({ linkedinPathSpeed: speed });
+        for (const [tabId] of pathOrchestrator.activeWorkers) {
+            injectMainWorldAntiPauseAndSpeed(tabId, speed);
+            sendTabMessageWithAutoInject(tabId, { action: "set_video_speed", speed: speed }, () => {});
+        }
+        savePathState();
+        broadcastPathProgress();
+        sendResponse({ status: "updated", speed: speed });
         return true;
     }
 
@@ -400,6 +437,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             course.completedVideos = request.completedVideos || course.completedVideos;
             course.totalVideos = request.totalVideos || course.totalVideos;
         }
+        savePathState();
         broadcastPathProgress();
         sendResponse({ status: "ok" });
         return true;
@@ -477,12 +515,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
     // 2. LinkedIn Learning Worker Tab initialization
     if (pathOrchestrator.isRunning && pathOrchestrator.activeWorkers.has(tabId)) {
-        if (changeInfo.status === 'complete') {
+        if (changeInfo.status === 'complete' || changeInfo.url) {
             const courseId = pathOrchestrator.activeWorkers.get(tabId);
             const course = pathOrchestrator.courses.find(c => c.id === courseId);
             if (!course) return;
 
-            // Wait 1.5s for DOM / React hydration to settle, then inject & launch
+            // Wait 1.0s for DOM / React hydration to settle, then inject & launch
             setTimeout(async () => {
                 try {
                     // Inject Anti-Pause + Speed in MAIN world
@@ -521,7 +559,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                 } catch(e) {
                     console.error("[Path Orchestrator] Worker start error:", e);
                 }
-            }, 1500);
+            }, 1000);
         }
     }
 });

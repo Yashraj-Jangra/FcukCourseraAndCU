@@ -750,6 +750,22 @@
         <span id="linkedinStartPathText">Complete Entire Learning Path</span>
       </button>
 
+      <div class="action-grid-2" style="margin-bottom: 8px;">
+        <button id="toggleHudBtn" class="btn-action" style="display: flex; align-items: center; justify-content: center; gap: 5px;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+          <span>Floating HUD</span>
+        </button>
+        <div class="speed-control-box">
+          <span class="speed-control-label">Speed</span>
+          <select id="linkedinPathSpeedSelect" class="speed-dropdown">
+            <option value="16" selected>16x Turbo</option>
+            <option value="8">8x Ultra</option>
+            <option value="4">4x Fast</option>
+            <option value="2">2x Native</option>
+          </select>
+        </div>
+      </div>
+
       <!-- Worker Tray (Active during Path processing) -->
       <div id="linkedinWorkerTray" class="worker-tray" style="display: none;">
         <div class="worker-tray-title">

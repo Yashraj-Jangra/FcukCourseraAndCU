@@ -530,6 +530,11 @@ function renderPathWorkerState(state) {
             statusEl.innerText = `Parallel Workers: ${state.activeWorkerCount} tabs active (max ${state.maxConcurrency})...`;
         }
     }
+
+    if (state.targetSpeed) {
+        const pathSpeedSelect = document.getElementById('linkedinPathSpeedSelect');
+        if (pathSpeedSelect) pathSpeedSelect.value = String(state.targetSpeed);
+    }
 }
 
 // Concurrency Selector (Pills 1 - 5, default 3)
@@ -585,8 +590,11 @@ if (linkedinStartPathBtn) {
         const activePill = document.querySelector('.concurrency-pill.active');
         const concurrency = activePill ? parseInt(activePill.getAttribute('data-concurrency'), 10) || 3 : 3;
 
-        const speedSelect = document.getElementById('linkedinSpeedSelect');
-        const speed = speedSelect ? parseFloat(speedSelect.value) || 16.0 : 16.0;
+        const pathSpeedSelect = document.getElementById('linkedinPathSpeedSelect') || document.getElementById('linkedinSpeedSelect');
+        const speed = pathSpeedSelect ? parseFloat(pathSpeedSelect.value) || 16.0 : 16.0;
+
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const overviewTabId = activeTab ? activeTab.id : null;
 
         setRunningUIState(true);
         activePathRunning = true;
@@ -600,7 +608,8 @@ if (linkedinStartPathBtn) {
             pathUrl: detectedLinkedInContext.pathUrl || "",
             courses: detectedLinkedInContext.courses,
             maxConcurrency: concurrency,
-            speed: speed
+            speed: speed,
+            overviewTabId: overviewTabId
         }, (resp) => {
             if (chrome.runtime.lastError) {
                 setRunningUIState(false);
@@ -627,6 +636,28 @@ if (linkedinSwitchPathBtn) {
                 window.close();
             }
         }
+    });
+}
+
+// Floating HUD Toggle Button
+const toggleHudBtn = document.getElementById('toggleHudBtn');
+if (toggleHudBtn) {
+    toggleHudBtn.addEventListener('click', async () => {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab && activeTab.id) {
+            sendTabMessageWithAutoInject(activeTab.id, { action: "show_floating_hud" }, () => {
+                window.close();
+            });
+        }
+    });
+}
+
+// Path Speed Selector Dynamic Change
+const linkedinPathSpeedSelect = document.getElementById('linkedinPathSpeedSelect');
+if (linkedinPathSpeedSelect) {
+    linkedinPathSpeedSelect.addEventListener('change', () => {
+        const val = parseFloat(linkedinPathSpeedSelect.value) || 16.0;
+        chrome.runtime.sendMessage({ action: "set_path_speed", speed: val }).catch(() => {});
     });
 }
 
@@ -759,6 +790,11 @@ document.getElementById('readBtn').addEventListener('click', async () => {
                         p.classList.remove('active');
                     }
                 });
+            }
+
+            if (state.targetSpeed) {
+                const pathSpeedSelect = document.getElementById('linkedinPathSpeedSelect');
+                if (pathSpeedSelect) pathSpeedSelect.value = String(state.targetSpeed);
             }
 
             renderPathWorkerState(state);

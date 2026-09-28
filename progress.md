@@ -2,6 +2,24 @@
 
 ## Session Summary (2026-09-28)
 
+- ✨ **In-Page Persistent Floating HUD, Worker Tab Video Auto-Mounting & Resilient 16x Speed Enforcement (`content.js`, `background.js`, `popup.html`, `popup.js`)**:
+  - **In-Page Persistent Floating HUD (`content.js`)**:
+    - Built `#fcuk-floating-hud`: a sleek, glassmorphic floating control center injected directly into the LinkedIn page DOM so users never lose UI state when clicking away or closing the extension popup.
+    - Features: real-time progress bar and percentage, completed/total counter, dynamic concurrency pills (1–5 parallel tabs), live speed selector (16x/8x/4x/2x), active worker tray with individual course status badges, stop button, drag handle, and minimize-to-pill toggle.
+    - Synchronized canonically across all tabs and background service worker via `chrome.storage.onChanged` listening on `linkedinPathState` in `chrome.storage.local`.
+  - **Course Overview Video Player Auto-Mounting (`content.js`)**:
+    - Discovered root cause of stalled worker tabs: background worker tabs opened course overview landing pages where `<video>` is not initially present.
+    - Implemented `ensureLinkedInVideoPlayerMounted(maxWaitMs)`: detects Course Overview pages and auto-clicks hero CTA buttons (`[data-control-name="resume_course"]`, `[data-control-name="start_course"]`, `button:contains("Resume course")`, or the first lesson link in `.classroom-toc-item`) to launch the lesson player.
+    - Increased `waitForLinkedInVideo` timeout to 12s with proactive CTA mounting fallback after 1.5s, eliminating 6-second timeout failures.
+  - **Continuous 16x Turbo Speed Re-enforcement in Background Tabs (`background.js`, `content.js`)**:
+    - Discovered root cause of 16x speed loss in background tabs: LinkedIn's SPA client-side pushState transitions between overview and lesson routes bypassed the initial page load speed injection.
+    - Worker tabs now proactively send `inject_main_world_speed` upon lesson mount and after every video lesson advancement.
+    - Updated `chrome.tabs.onUpdated` in `background.js` to listen for both `changeInfo.status === 'complete'` and `changeInfo.url` changes.
+    - Added `set_path_speed` action in `background.js`: dynamically updates `pathOrchestrator.targetSpeed`, saves to storage, and immediately pushes MAIN world anti-pause and playbackRate overrides to all running worker tabs.
+  - **Popup Floating HUD Summoner & Overview Tab Tracking (`popup.html`, `popup.js`)**:
+    - Added "Floating HUD" button in the Learning Path section of `popup.html` and wired it in `popup.js` to summon/focus the in-page HUD on the active tab.
+    - Tracks and persists `overviewTabId` during path launch, ensuring the orchestrator broadcasts real-time progress to both extension views and the overview tab.
+
 - 🐛 **Fix Learning Path Course Detection Trap & Add Live Rescan Fallback (`content.js`, `popup.js`)**:
   - **Root Cause Analysis ("No courses detected in this Learning Path")**:
     1. **Heading Tag Trap**: `scanLinkedInLearningPath()` previously used `h.closest('section, [class*="section"], [class*="content"], [class*="learning-path"]')` starting from the `"Content in this Learning Path"` `<h2>` heading. Because the `<h2>` tag had class names containing `"content"` (e.g. `content-title`), `h.closest(...)` resolved to the `<h2>` tag itself. Consequently, querying `contentContainer.querySelectorAll('a[href*="/learning/"]')` searched inside the heading element, returning 0 links.

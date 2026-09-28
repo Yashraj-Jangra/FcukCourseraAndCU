@@ -235,6 +235,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
     }
 
+    if (request.action === "show_floating_hud") {
+        createLinkedInFloatingHUD();
+        chrome.storage.local.get(['linkedinPathState'], (res) => {
+            if (res && res.linkedinPathState) {
+                renderFloatingHudState(res.linkedinPathState);
+            }
+        });
+        sendResponse({ status: "hud_shown" });
+        return true;
+    }
+
+    if (request.action === "path_progress_update") {
+        if (request.state) {
+            if (!floatingHudEl && isLinkedInLearningPathPage() && request.state.isRunning) {
+                createLinkedInFloatingHUD();
+            }
+            if (floatingHudEl) {
+                renderFloatingHudState(request.state);
+            }
+        }
+        sendResponse({ status: "updated" });
+        return true;
+    }
+
     if (request.action === "start_reading_completion") {
         if (globalState.isRunning) {
             sendResponse({ status: "already_running" });
@@ -5679,6 +5703,581 @@ function getLinkedInContext() {
     }
 }
 
+// =========================================================================
+// In-Page Persistent Floating HUD Window (LinkedIn Learning)
+// =========================================================================
+let floatingHudEl = null;
+let hudDragState = { isDragging: false, startX: 0, startY: 0, initialLeft: 0, initialTop: 0 };
+
+function createLinkedInFloatingHUD() {
+    if (document.getElementById('fcuk-floating-hud')) {
+        floatingHudEl = document.getElementById('fcuk-floating-hud');
+        floatingHudEl.style.display = 'block';
+        return floatingHudEl;
+    }
+
+    const hud = document.createElement('div');
+    hud.id = 'fcuk-floating-hud';
+    hud.innerHTML = `
+        <style>
+            #fcuk-floating-hud {
+                position: fixed;
+                bottom: 24px;
+                right: 24px;
+                width: 330px;
+                max-width: calc(100vw - 32px);
+                background: rgba(14, 16, 21, 0.95);
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 12px;
+                box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 1px rgba(255, 255, 255, 0.2);
+                color: #f4f4f6;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                font-size: 11px;
+                z-index: 2147483647;
+                overflow: hidden;
+                user-select: none;
+                transition: opacity 0.15s ease, transform 0.15s ease;
+            }
+            #fcuk-floating-hud.minimized {
+                width: auto;
+                cursor: pointer;
+                border-radius: 9999px;
+                padding: 6px 14px;
+                background: rgba(14, 16, 21, 0.92);
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            }
+            #fcuk-floating-hud.minimized .hud-body,
+            #fcuk-floating-hud.minimized .hud-header-actions {
+                display: none !important;
+            }
+            #fcuk-floating-hud.minimized .hud-header {
+                padding: 0;
+                border-bottom: none;
+                gap: 8px;
+            }
+            #fcuk-floating-hud.minimized .hud-pill-summary {
+                display: flex !important;
+            }
+            .hud-pill-summary {
+                display: none;
+                align-items: center;
+                gap: 6px;
+                font-size: 11px;
+                font-weight: 600;
+                color: #38bdf8;
+            }
+            .hud-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 10px 12px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                cursor: grab;
+                background: rgba(255, 255, 255, 0.02);
+            }
+            .hud-header:active {
+                cursor: grabbing;
+            }
+            .hud-title-box {
+                display: flex;
+                align-items: center;
+                gap: 7px;
+                overflow: hidden;
+            }
+            .hud-dot {
+                width: 7px;
+                height: 7px;
+                border-radius: 50%;
+                background: #10b981;
+                box-shadow: 0 0 8px #10b981;
+                flex-shrink: 0;
+            }
+            .hud-dot.busy {
+                animation: hudPulse 1.4s ease-in-out infinite;
+            }
+            @keyframes hudPulse {
+                0%, 100% { opacity: 1; transform: scale(1); }
+                50% { opacity: 0.4; transform: scale(0.85); }
+            }
+            .hud-title {
+                font-size: 11.5px;
+                font-weight: 600;
+                color: #f4f4f6;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 190px;
+            }
+            .hud-btn-icon {
+                background: transparent;
+                border: none;
+                color: #8e929e;
+                cursor: pointer;
+                padding: 2px 6px;
+                border-radius: 4px;
+                font-size: 13px;
+                line-height: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .hud-btn-icon:hover {
+                color: #ffffff;
+                background: rgba(255, 255, 255, 0.1);
+            }
+            .hud-body {
+                padding: 11px 12px;
+                display: flex;
+                flex-direction: column;
+                gap: 9px;
+            }
+            .hud-progress-card {
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+                padding: 7px 9px;
+            }
+            .hud-progress-row {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 5px;
+            }
+            .hud-progress-label {
+                font-size: 10px;
+                color: #8e929e;
+                font-weight: 500;
+            }
+            .hud-progress-val {
+                font-size: 10.5px;
+                font-weight: 700;
+                color: #38bdf8;
+            }
+            .hud-bar-track {
+                width: 100%;
+                height: 4px;
+                background: rgba(255, 255, 255, 0.08);
+                border-radius: 9999px;
+                overflow: hidden;
+            }
+            .hud-bar-fill {
+                height: 100%;
+                width: 0%;
+                background: linear-gradient(90deg, #0284c7, #38bdf8);
+                border-radius: 9999px;
+                transition: width 0.3s ease;
+            }
+            .hud-tray {
+                background: rgba(0, 0, 0, 0.25);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
+                padding: 6px 8px;
+                max-height: 130px;
+                overflow-y: auto;
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+            }
+            .hud-worker-item {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 6px;
+                padding: 3px 5px;
+                background: rgba(255, 255, 255, 0.03);
+                border-radius: 4px;
+                font-size: 9.5px;
+            }
+            .hud-worker-title {
+                color: #e2e4ea;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 190px;
+            }
+            .hud-badge {
+                font-size: 9px;
+                font-weight: 600;
+                padding: 1px 5px;
+                border-radius: 3px;
+                white-space: nowrap;
+            }
+            .hud-badge-running {
+                background: rgba(2, 132, 199, 0.2);
+                color: #38bdf8;
+                border: 1px solid rgba(2, 132, 199, 0.35);
+            }
+            .hud-badge-done {
+                background: rgba(16, 185, 129, 0.2);
+                color: #34d399;
+                border: 1px solid rgba(16, 185, 129, 0.35);
+            }
+            .hud-badge-queued {
+                background: rgba(255, 255, 255, 0.06);
+                color: #8e929e;
+            }
+            .hud-controls-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 6px;
+            }
+            .hud-pill-group {
+                display: flex;
+                gap: 3px;
+            }
+            .hud-pill {
+                min-width: 20px;
+                height: 19px;
+                padding: 0 4px;
+                font-size: 9px;
+                font-weight: 600;
+                border-radius: 3px;
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                color: #8e929e;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .hud-pill:hover {
+                color: #ffffff;
+                border-color: rgba(255, 255, 255, 0.25);
+            }
+            .hud-pill.active {
+                background: #0284c7;
+                border-color: #0284c7;
+                color: #ffffff;
+            }
+            .hud-speed-select {
+                background: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                color: #f4f4f6;
+                border-radius: 4px;
+                font-size: 9.5px;
+                font-weight: 600;
+                padding: 2px 4px;
+                outline: none;
+                cursor: pointer;
+            }
+            .hud-speed-select option {
+                background: #14171f;
+                color: #f4f4f6;
+            }
+            .hud-btn-stop {
+                width: 100%;
+                padding: 6px;
+                border-radius: 6px;
+                font-size: 10px;
+                font-weight: 600;
+                background: rgba(239, 68, 68, 0.12);
+                border: 1px solid rgba(239, 68, 68, 0.3);
+                color: #f87171;
+                cursor: pointer;
+                transition: all 0.12s ease;
+            }
+            .hud-btn-stop:hover {
+                background: rgba(239, 68, 68, 0.2);
+                border-color: rgba(239, 68, 68, 0.5);
+            }
+        </style>
+
+        <!-- Header -->
+        <div class="hud-header" id="hudDragHeader">
+            <div class="hud-title-box">
+                <span class="hud-dot" id="hudStatusDot"></span>
+                <span class="hud-title" id="hudTitle">LinkedIn Learning Path</span>
+                <div class="hud-pill-summary" id="hudPillSummary">
+                    <span id="hudPillStats">0/0 done</span>
+                </div>
+            </div>
+            <div class="hud-header-actions" style="display: flex; gap: 2px;">
+                <button class="hud-btn-icon" id="hudMinimizeBtn" title="Minimize to pill">−</button>
+                <button class="hud-btn-icon" id="hudCloseBtn" title="Close HUD">×</button>
+            </div>
+        </div>
+
+        <!-- Body -->
+        <div class="hud-body">
+            <!-- Progress Card -->
+            <div class="hud-progress-card">
+                <div class="hud-progress-row">
+                    <span class="hud-progress-label" id="hudProgressLabel">Progress</span>
+                    <span class="hud-progress-val" id="hudProgressVal">0% (0/0)</span>
+                </div>
+                <div class="hud-bar-track">
+                    <div class="hud-bar-fill" id="hudBarFill"></div>
+                </div>
+            </div>
+
+            <!-- Worker Tray -->
+            <div class="hud-tray" id="hudWorkerTray">
+                <div style="font-size: 9px; color: #8e929e; font-weight: 600; margin-bottom: 2px;">
+                    Parallel Sub-Workers (<span id="hudActiveCount">0</span> active)
+                </div>
+                <div id="hudWorkerList"></div>
+            </div>
+
+            <!-- Controls Row: Concurrency + Speed -->
+            <div class="hud-controls-row">
+                <div style="display: flex; align-items: center; gap: 4px;">
+                    <span style="font-size: 9px; color: #8e929e;">Tabs:</span>
+                    <div class="hud-pill-group" id="hudConcurrencyPills">
+                        <button class="hud-pill" data-conc="1">1</button>
+                        <button class="hud-pill" data-conc="2">2</button>
+                        <button class="hud-pill active" data-conc="3">3</button>
+                        <button class="hud-pill" data-conc="4">4</button>
+                        <button class="hud-pill" data-conc="5">5</button>
+                    </div>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 4px;">
+                    <span style="font-size: 9px; color: #8e929e;">Speed:</span>
+                    <select class="hud-speed-select" id="hudSpeedSelect">
+                        <option value="16" selected>16x Turbo</option>
+                        <option value="8">8x Ultra</option>
+                        <option value="4">4x Fast</option>
+                        <option value="2">2x Native</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Stop Button -->
+            <button class="hud-btn-stop" id="hudStopBtn">Stop All Workers</button>
+        </div>
+    `;
+
+    document.body.appendChild(hud);
+    floatingHudEl = hud;
+
+    // Restore saved position & minimized state
+    chrome.storage.local.get(['fcukHudPosition', 'fcukHudCollapsed'], (res) => {
+        if (res.fcukHudPosition) {
+            hud.style.left = `${res.fcukHudPosition.x}px`;
+            hud.style.top = `${res.fcukHudPosition.y}px`;
+            hud.style.bottom = 'auto';
+            hud.style.right = 'auto';
+        }
+        if (res.fcukHudCollapsed) {
+            hud.classList.add('minimized');
+        }
+    });
+
+    initHudDragging(hud);
+    attachHudControls(hud);
+
+    return hud;
+}
+
+function initHudDragging(hud) {
+    const header = hud.querySelector('#hudDragHeader');
+    if (!header) return;
+
+    header.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.hud-btn-icon')) return;
+        if (hud.classList.contains('minimized')) return;
+
+        hudDragState.isDragging = true;
+        hudDragState.startX = e.clientX;
+        hudDragState.startY = e.clientY;
+
+        const rect = hud.getBoundingClientRect();
+        hudDragState.initialLeft = rect.left;
+        hudDragState.initialTop = rect.top;
+
+        hud.setPointerCapture(e.pointerId);
+    });
+
+    header.addEventListener('pointermove', (e) => {
+        if (!hudDragState.isDragging) return;
+
+        const dx = e.clientX - hudDragState.startX;
+        const dy = e.clientY - hudDragState.startY;
+
+        let newLeft = hudDragState.initialLeft + dx;
+        let newTop = hudDragState.initialTop + dy;
+
+        // Viewport bounds clamping
+        newLeft = Math.max(10, Math.min(window.innerWidth - hud.offsetWidth - 10, newLeft));
+        newTop = Math.max(10, Math.min(window.innerHeight - hud.offsetHeight - 10, newTop));
+
+        hud.style.left = `${newLeft}px`;
+        hud.style.top = `${newTop}px`;
+        hud.style.bottom = 'auto';
+        hud.style.right = 'auto';
+    });
+
+    const onPointerUp = (e) => {
+        if (hudDragState.isDragging) {
+            hudDragState.isDragging = false;
+            try { hud.releasePointerCapture(e.pointerId); } catch(err) {}
+            const rect = hud.getBoundingClientRect();
+            chrome.storage.local.set({
+                fcukHudPosition: { x: Math.round(rect.left), y: Math.round(rect.top) }
+            }).catch(() => {});
+        }
+    };
+
+    header.addEventListener('pointerup', onPointerUp);
+    header.addEventListener('pointercancel', onPointerUp);
+}
+
+function attachHudControls(hud) {
+    // Minimize / Expand
+    const minBtn = hud.querySelector('#hudMinimizeBtn');
+    if (minBtn) {
+        minBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            hud.classList.toggle('minimized');
+            const isMin = hud.classList.contains('minimized');
+            chrome.storage.local.set({ fcukHudCollapsed: isMin });
+        });
+    }
+
+    // Click pill to expand when minimized
+    hud.addEventListener('click', (e) => {
+        if (hud.classList.contains('minimized') && !e.target.closest('.hud-btn-icon')) {
+            hud.classList.remove('minimized');
+            chrome.storage.local.set({ fcukHudCollapsed: false });
+        }
+    });
+
+    // Close button
+    const closeBtn = hud.querySelector('#hudCloseBtn');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            hud.style.display = 'none';
+        });
+    }
+
+    // Concurrency pills
+    const pills = hud.querySelectorAll('.hud-pill');
+    pills.forEach(p => {
+        p.addEventListener('click', (e) => {
+            e.stopPropagation();
+            pills.forEach(pill => pill.classList.remove('active'));
+            p.classList.add('active');
+            const conc = parseInt(p.getAttribute('data-conc'), 10) || 3;
+            chrome.runtime.sendMessage({ action: "set_path_concurrency", concurrency: conc }).catch(() => {});
+        });
+    });
+
+    // Speed selector
+    const speedSelect = hud.querySelector('#hudSpeedSelect');
+    if (speedSelect) {
+        speedSelect.addEventListener('change', (e) => {
+            e.stopPropagation();
+            const spd = parseFloat(speedSelect.value) || 16.0;
+            currentLinkedInSpeed = spd;
+            chrome.storage.local.set({ linkedinTargetSpeed: spd });
+            chrome.runtime.sendMessage({ action: "set_linkedin_speed", speed: spd }).catch(() => {});
+        });
+    }
+
+    // Stop button
+    const stopBtn = hud.querySelector('#hudStopBtn');
+    if (stopBtn) {
+        stopBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            stopBtn.innerText = "Stopping...";
+            chrome.runtime.sendMessage({ action: "stop_learning_path" }, () => {
+                stopBtn.innerText = "Stopped";
+                setTimeout(() => { stopBtn.innerText = "Stop All Workers"; }, 2000);
+            });
+        });
+    }
+}
+
+function renderFloatingHudState(state) {
+    if (!state) return;
+    if (!floatingHudEl) {
+        createLinkedInFloatingHUD();
+    }
+    const hud = floatingHudEl;
+    if (!hud) return;
+
+    hud.style.display = 'block';
+
+    const titleEl = hud.querySelector('#hudTitle');
+    const dot = hud.querySelector('#hudStatusDot');
+    const progressVal = hud.querySelector('#hudProgressVal');
+    const barFill = hud.querySelector('#hudBarFill');
+    const activeCount = hud.querySelector('#hudActiveCount');
+    const workerList = hud.querySelector('#hudWorkerList');
+    const pillStats = hud.querySelector('#hudPillStats');
+    const speedSelect = hud.querySelector('#hudSpeedSelect');
+
+    if (titleEl) titleEl.innerText = state.pathTitle || "Learning Path";
+    if (dot) {
+        if (state.isRunning) dot.classList.add('busy');
+        else dot.classList.remove('busy');
+    }
+
+    const total = state.totalCourses || 0;
+    const completed = state.completedCourses || 0;
+    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+    if (progressVal) progressVal.innerText = `${pct}% (${completed}/${total})`;
+    if (barFill) barFill.style.width = `${pct}%`;
+    if (activeCount) activeCount.innerText = String(state.activeWorkerCount || 0);
+    if (pillStats) pillStats.innerText = `⚡ ${state.targetSpeed || 16}x • ${completed}/${total} (${pct}%)`;
+
+    // Concurrency pills sync
+    if (state.maxConcurrency) {
+        const pills = hud.querySelectorAll('.hud-pill');
+        pills.forEach(p => {
+            if (parseInt(p.getAttribute('data-conc'), 10) === state.maxConcurrency) {
+                p.classList.add('active');
+            } else {
+                p.classList.remove('active');
+            }
+        });
+    }
+
+    // Speed dropdown sync
+    if (speedSelect && state.targetSpeed) {
+        speedSelect.value = String(state.targetSpeed);
+    }
+
+    // Worker list rendering
+    if (workerList && Array.isArray(state.courses)) {
+        workerList.innerHTML = '';
+        state.courses.forEach(c => {
+            const item = document.createElement('div');
+            item.className = 'hud-worker-item';
+
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'hud-worker-title';
+            const icon = c.itemType === 'video' ? '🎬 ' : '📚 ';
+            titleSpan.innerText = `${c.index}. ${icon}${c.title}`;
+            titleSpan.title = c.title;
+
+            const badgeSpan = document.createElement('span');
+            let badgeClass = 'hud-badge-queued';
+            let badgeText = 'Queued';
+
+            if (c.status === 'completed') {
+                badgeClass = 'hud-badge-done';
+                badgeText = '100% ✓';
+            } else if (c.status === 'running') {
+                badgeClass = 'hud-badge-running';
+                badgeText = c.percent > 0 ? `${c.percent}%` : 'Running...';
+            }
+
+            badgeSpan.className = `hud-badge ${badgeClass}`;
+            badgeSpan.innerText = badgeText;
+
+            item.appendChild(titleSpan);
+            item.appendChild(badgeSpan);
+            workerList.appendChild(item);
+        });
+    }
+}
+
 function getLinkedInVideo() {
     // 1. Look for active video in classroom player containers
     const playerSelectors = [
@@ -5759,7 +6358,82 @@ function triggerLinkedInNativePlay(video) {
     return false;
 }
 
-async function waitForLinkedInVideo(timeoutMs = 6000) {
+async function ensureLinkedInVideoPlayerMounted(maxWaitMs = 12000) {
+    if (getLinkedInVideo()) return true;
+
+    log("[LinkedIn] Video player not yet mounted. Checking for Course Overview Start/Resume buttons...");
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+        if (globalState.abortRequested) return false;
+
+        const video = getLinkedInVideo();
+        if (video) {
+            triggerLinkedInNativePlay(video);
+            return true;
+        }
+
+        // 1. Look for and click Resume / Start Hero CTA buttons on Course Overview pages
+        const startSelectors = [
+            'button[data-control-name="resume_course"]',
+            'button[data-control-name="start_course"]',
+            'a[data-control-name="resume_course"]',
+            'a[data-control-name="start_course"]',
+            '.course-hero button',
+            '.course-hero a',
+            '[class*="hero"] button[class*="cta" i]',
+            '[class*="hero"] a[class*="cta" i]',
+            'button[aria-label*="Resume" i]',
+            'button[aria-label*="Start" i]'
+        ];
+
+        for (const sel of startSelectors) {
+            const btn = document.querySelector(sel);
+            if (btn && (btn.offsetParent !== null || btn.clientWidth > 0)) {
+                log(`[LinkedIn] Found hero action (${sel}). Clicking to launch course player...`);
+                clickNativeElement(btn);
+                await new Promise(r => setTimeout(r, 1200));
+                if (getLinkedInVideo()) return true;
+            }
+        }
+
+        // 2. Search for buttons/links by inner text
+        const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+        for (const el of buttons) {
+            const text = (el.innerText || '').trim().toLowerCase();
+            if (text === 'resume course' || text === 'start course' || 
+                text === 'resume learning' || text === 'start learning' ||
+                text === 'continue' || text === 'watch course' ||
+                text === 'resume' || text === 'start') {
+                log(`[LinkedIn] Clicking "${text}" button to initialize course player...`);
+                clickNativeElement(el);
+                await new Promise(r => setTimeout(r, 1200));
+                if (getLinkedInVideo()) return true;
+            }
+        }
+
+        // 3. Fallback: Click first syllabus lesson in the classroom TOC
+        expandAllLinkedInChapters();
+        const tocLinks = Array.from(document.querySelectorAll(
+            '.classroom-toc-item a, [data-test-toc-item] a, [class*="toc-item"] a, .classroom-sidebar a[href*="/learning/"]'
+        ));
+        for (const link of tocLinks) {
+            const href = (link.getAttribute('href') || link.href || '').toLowerCase();
+            if (href.includes('/learning/') && !href.includes('/paths/') && !href.includes('/career-hub')) {
+                log(`[LinkedIn] Clicking syllabus lesson to launch video player...`);
+                clickNativeElement(link);
+                await new Promise(r => setTimeout(r, 1200));
+                if (getLinkedInVideo()) return true;
+            }
+        }
+
+        await new Promise(r => setTimeout(r, 400));
+    }
+
+    return !!getLinkedInVideo();
+}
+
+async function waitForLinkedInVideo(timeoutMs = 7000) {
     const startTime = Date.now();
     while (Date.now() - startTime < timeoutMs) {
         if (globalState.abortRequested) return null;
@@ -5783,7 +6457,21 @@ async function waitForLinkedInVideo(timeoutMs = 6000) {
             triggerLinkedInNativePlay(video);
             return video;
         }
-        await new Promise(r => setTimeout(r, 150));
+
+        // If after 1.5 seconds no video found, attempt mounting course overview CTA
+        if (Date.now() - startTime > 1500) {
+            await ensureLinkedInVideoPlayerMounted(3500);
+            const mounted = getLinkedInVideo();
+            if (mounted) {
+                mounted.muted = true;
+                mounted.defaultMuted = true;
+                mounted.volume = 0;
+                triggerLinkedInNativePlay(mounted);
+                return mounted;
+            }
+        }
+
+        await new Promise(r => setTimeout(r, 200));
     }
     return getLinkedInVideo();
 }
@@ -6150,13 +6838,19 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
         return true;
     }
 
-    const video = await waitForLinkedInVideo(6000);
+    const video = await waitForLinkedInVideo(12000);
     if (!video) {
         if (await skipLinkedInQuizIfPresent()) {
             return true;
         }
         throw new Error("Could not find active video player on page.");
     }
+
+    // Proactively request background to inject main-world anti-pause and speed overrides
+    chrome.runtime.sendMessage({
+        action: "inject_main_world_speed",
+        speed: targetSpeed
+    }).catch(() => {});
 
     // 2. Prime video immediately to satisfy browser autoplay policy & start HLS chunk download
     try {
@@ -6483,6 +7177,15 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
         });
     }
 
+    // Ensure video player is mounted (in case we landed on Course Overview page)
+    await ensureLinkedInVideoPlayerMounted(12000);
+
+    // Request background to enforce MAIN world speed and anti-pause hook
+    chrome.runtime.sendMessage({
+        action: "inject_main_world_speed",
+        speed: targetSpeed
+    }).catch(() => {});
+
     let loopSafety = 0;
     const MAX_VIDEOS = 150;
 
@@ -6600,6 +7303,12 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
 
             log("[LinkedIn] Loading next video lesson...");
             await new Promise(r => setTimeout(r, 2000));
+            // Proactively re-ensure video player mounted & re-inject main world speed
+            await ensureLinkedInVideoPlayerMounted(6000);
+            chrome.runtime.sendMessage({
+                action: "inject_main_world_speed",
+                speed: currentLinkedInSpeed
+            }).catch(() => {});
         }
 
         if (globalState.abortRequested) {
@@ -6691,4 +7400,27 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
     } catch(e) {
         console.log("Notice in queue auto-resume:", e);
     }
+})();
+
+// Synchronize Floating HUD with Persistent Storage across all tabs and popup updates
+chrome.storage.onChanged.addListener((changes, namespace) => {
+    if (namespace === 'local' && changes.linkedinPathState) {
+        if (changes.linkedinPathState.newValue) {
+            renderFloatingHudState(changes.linkedinPathState.newValue);
+        } else if (floatingHudEl) {
+            floatingHudEl.style.display = 'none';
+        }
+    }
+});
+
+// Auto-initialize Floating HUD if a learning path is currently stored in storage
+(async () => {
+    try {
+        if (typeof isLinkedInLearningPlatform === 'function' && isLinkedInLearningPlatform()) {
+            const data = await chrome.storage.local.get(['linkedinPathState']);
+            if (data.linkedinPathState && (data.linkedinPathState.isRunning || data.linkedinPathState.totalCourses > 0)) {
+                renderFloatingHudState(data.linkedinPathState);
+            }
+        }
+    } catch(e) {}
 })();

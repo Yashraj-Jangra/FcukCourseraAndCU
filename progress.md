@@ -26,9 +26,12 @@
       - 5.0s stall: Refreshes stream non-destructively: clicks native retry/play buttons, primes muted state, performs seek nudge, and triggers native playback.
       - 8.0s stall: Steps down speed to 4x to relieve MSE network buffer throttling and triggers native play.
       - 12.0s stall: Reloads page with persistent queue auto-resume.
-  - **Proactive Video Priming & Failsafe Metadata Resolution (`waitForLinkedInVideo` & `playLinkedInVideoToCompletion`)**:
+  - **Proactive Video Priming, Non-Blocking Play & React Element Re-binding (`waitForLinkedInVideo`, `getLinkedInVideo`, `triggerLinkedInNativePlay`, `playLinkedInVideoToCompletion`)**:
     - Eliminated the 12s idle wait in `waitForLinkedInVideo`: immediately primes the video element (`muted = true`, `defaultMuted = true`, `volume = 0`) upon DOM discovery and triggers native play so LinkedIn's HLS player initiates stream buffering.
-    - Replaced the passive 3s single-listener wait with a proactive multi-event race (`loadedmetadata`, `loadeddata`, `canplay`, `playing`, `timeupdate`) paired with an active 200ms polling loop and a hard 3.5s failsafe timeout.
+    - Fixed root cause of post-metadata freeze: removed blocking `await video.play()`. When a stream is buffering or unready, standard `await video.play()` suspends async execution indefinitely; replaced with non-blocking `video.play().catch(...)` and native trigger.
+    - Fixed `triggerLinkedInNativePlay`: replaced loose `[aria-label*="play"]` matching that inadvertently clicked the "Autoplay" toggle switch instead of the real play button. Enforced strict exact-match selectors (`[aria-label="Play" i]`, `[aria-label="Play video" i]`) and explicit exclusions (`!label.includes('autoplay')`).
+    - Added dynamic DOM re-binding: during polling and in the watchdog interval, checks `!document.body.contains(video)` and refreshes the video reference if LinkedIn's React tree unmounts/swaps the video element.
+    - Upgraded 12s watchdog fallback: attempts advancing to the next video (`advanceToNextLinkedInVideo`) before resorting to a full page reload.
     - Added instant completion short-circuit: if the TOC checkmark appears during stream initialization, playback resolves immediately without waiting.
   - **Automatic Quiz & Assessment Skipper (`isLinkedInQuizPage`, `skipLinkedInQuizIfPresent`, `scanLinkedInTOC`)**:
     - Upgraded `scanLinkedInTOC()` to detect chapter quizzes, practice exams, assessments, and knowledge checks via regex title matching, URLs (`/quiz/`, `/assessment/`), ARIA labels, and SVG icons.

@@ -5331,46 +5331,79 @@ function applyLinkedInSpeed(speed = 16.0) {
 }
 
 function getLinkedInVideo() {
-    return document.querySelector('video') || 
-           document.querySelector('.video-player video') || 
-           document.querySelector('.classroom-player video') ||
-           document.querySelector('.vjs-tech') ||
-           document.querySelector('[data-video-id] video') ||
-           document.querySelector('video.classroom-player__video');
+    // 1. Look for active video in classroom player containers
+    const playerSelectors = [
+        '.classroom-player video',
+        'video.classroom-player__video',
+        '.video-player video',
+        '.vjs-tech',
+        '[data-video-id] video',
+        '[class*="classroom-player"] video'
+    ];
+    for (const sel of playerSelectors) {
+        const v = document.querySelector(sel);
+        if (v && document.body.contains(v)) {
+            return v;
+        }
+    }
+
+    // 2. Fallback: look for any visible HTML5 video in the DOM
+    const allVideos = Array.from(document.querySelectorAll('video'));
+    for (const v of allVideos) {
+        if (v && document.body.contains(v) && (v.offsetParent !== null || v.clientWidth > 0 || v.clientHeight > 0)) {
+            return v;
+        }
+    }
+
+    return allVideos[0] || null;
 }
 
 function triggerLinkedInNativePlay(video) {
     try {
+        if (!video || !document.body.contains(video)) {
+            video = getLinkedInVideo();
+        }
+
         if (video) {
             video.muted = true;
             video.defaultMuted = true;
             video.volume = 0;
+            // Always initiate HTML5 play request directly (never blocks async thread)
+            video.play().catch(() => {});
         }
 
-        const playSelectors = [
+        // Targeted play buttons - STRICT matching to never click Autoplay or other settings!
+        const playButtonSelectors = [
             'button.classroom-player__play-button',
+            'button[data-control-name="play_button"]',
             'button[data-control-name="play"]',
             'button.vjs-big-play-button',
-            'button.vjs-play-control',
-            'button[aria-label*="Play video" i]',
             'button[aria-label="Play" i]',
-            'button[aria-label*="play" i]',
-            'button[data-control-name="overlay_play"]',
-            '.classroom-player__overlay',
-            '.video-player__overlay',
-            '.vjs-poster'
+            'button[aria-label="Play video" i]',
+            'button[aria-label="Resume" i]',
+            'button[aria-label="Resume video" i]',
+            '.classroom-player__play-pause-btn[aria-label*="Play" i]',
+            'button[data-control-name="resume_course"]',
+            'button[data-control-name="start_course"]'
         ];
 
-        for (const sel of playSelectors) {
+        for (const sel of playButtonSelectors) {
             const btn = document.querySelector(sel);
             if (btn && btn.offsetParent !== null) {
-                clickNativeElement(btn);
-                return true;
+                const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                if (!label.includes('autoplay') && !label.includes('pause')) {
+                    clickNativeElement(btn);
+                    return true;
+                }
             }
         }
 
-        if (video && video.paused) {
-            video.play().catch(() => {});
+        // Click the player overlay / video element to toggle playback
+        const container = document.querySelector('.classroom-player') || 
+                          document.querySelector('.video-player') ||
+                          video;
+        if (container) {
+            clickNativeElement(container);
             return true;
         }
     } catch(e) {}
@@ -5520,20 +5553,25 @@ async function refreshLinkedInVideo(video) {
 
     // 2. Look for and click Retry / Play / Resume controls in player DOM
     const recoverySelectors = [
+        'button.classroom-player__play-button',
+        'button[data-control-name="play_button"]',
+        'button[data-control-name="play"]',
+        'button.vjs-big-play-button',
+        'button[aria-label="Play" i]',
+        'button[aria-label="Play video" i]',
+        'button[aria-label="Resume" i]',
+        'button[aria-label="Resume video" i]',
         'button[aria-label*="retry" i]',
         'button[aria-label*="reload" i]',
         '.vjs-error-display button',
-        'button.classroom-player__play-button',
-        'button[data-control-name="play"]',
-        'button.vjs-big-play-button',
-        'button.vjs-play-control',
-        'button[aria-label*="play" i]',
         '.classroom-player__overlay',
         '.video-player__overlay'
     ];
     for (const sel of recoverySelectors) {
         const btn = document.querySelector(sel);
         if (btn && btn.offsetParent !== null) {
+            const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+            if (label.includes('autoplay') || label.includes('pause')) continue;
             log(`[LinkedIn] Triggering player recovery control: ${sel}`);
             clickNativeElement(btn);
             await new Promise(r => setTimeout(r, 300));
@@ -5804,11 +5842,21 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
                     finish();
                     return;
                 }
-                if (!isNaN(video.duration) && video.duration > 0 && video.readyState >= 1) {
+
+                // Re-bind to fresh video element if React replaced it
+                const currentVideo = getLinkedInVideo();
+                if (currentVideo && currentVideo !== video) {
+                    video = currentVideo;
+                    video.muted = true;
+                    video.defaultMuted = true;
+                    video.volume = 0;
+                }
+
+                if (video && !isNaN(video.duration) && video.duration > 0 && video.readyState >= 1) {
                     finish();
                     return;
                 }
-                if (video.currentTime > 0) {
+                if (video && video.currentTime > 0) {
                     finish();
                     return;
                 }
@@ -5818,9 +5866,9 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
 
             // Maximum failsafe timeout - NEVER hang indefinitely on metadata
             const timeoutTimer = setTimeout(() => {
-                log("[LinkedIn] Metadata timeout elapsed — proceeding directly with stream playback.", "warning");
+                log("[LinkedIn] Initializing stream playback...");
                 finish();
-            }, 3500);
+            }, 2500);
 
             const cleanup = () => {
                 clearInterval(pollInterval);
@@ -5839,11 +5887,16 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
     // Apply speed via multi-tier system (MAIN world injection + content script)
     applyLinkedInSpeed(targetSpeed);
 
+    // Non-blocking playback initiation (NEVER await video.play() which can hang on buffering streams!)
     try {
-        await video.play();
-    } catch(e) {
-        triggerLinkedInNativePlay(video);
-    }
+        if (video) {
+            video.muted = true;
+            video.defaultMuted = true;
+            video.volume = 0;
+            video.play().catch(() => {});
+        }
+    } catch(e) {}
+    triggerLinkedInNativePlay(video);
 
     log(`[LinkedIn] 🚀 Fast-forwarding video at ${targetSpeed}x Turbo speed (muted)...`);
 
@@ -5901,12 +5954,26 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
                 return;
             }
 
+            // Re-bind to active DOM video element if React replaced it during playback
+            if (!video || !document.body.contains(video)) {
+                const fresh = getLinkedInVideo();
+                if (fresh) {
+                    video = fresh;
+                    video.muted = true;
+                    video.defaultMuted = true;
+                    video.volume = 0;
+                    applyLinkedInSpeed(currentLinkedInSpeed);
+                }
+            }
+
             // Continuously enforce playback rate and unpause
             if (video.playbackRate !== currentLinkedInSpeed) {
                 applyLinkedInSpeed(currentLinkedInSpeed);
             }
             if (video.paused && !video.ended) {
-                video.play().catch(() => {});
+                video.play().catch(() => {
+                    triggerLinkedInNativePlay(video);
+                });
             }
 
             const curr = Math.round(video.currentTime);
@@ -5942,9 +6009,15 @@ async function playLinkedInVideoToCompletion(targetSpeed = 16.0) {
                     triggerLinkedInNativePlay(video);
                     video.play().catch(() => {});
                 }
-                // 12.0s stall: complete freeze - reload page to recover
+                // 12.0s stall: try advancing before reloading
                 else if (stuckCount >= 48) {
-                    log("[LinkedIn] 🔄 Video player permanently stalled. Refreshing page to recover...", "error");
+                    log("[LinkedIn] 🔄 Video player stalled. Checking if lesson completed or advancing...", "warning");
+                    if (isCurrentLinkedInLessonCompleted() || await advanceToNextLinkedInVideo()) {
+                        cleanup();
+                        resolve(true);
+                        return;
+                    }
+                    log("[LinkedIn] 🔄 Reloading page to recover...", "error");
                     showOnScreenHUD("🔄 Reloading page...", "error");
                     cleanup();
                     await chrome.storage.local.set({ 

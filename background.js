@@ -37,11 +37,79 @@ let pathOrchestrator = {
     smartConcurrency: true, // Adaptive dynamic concurrency enabled
     lastThrottleTime: 0,    // Cooldown timestamp between auto-throttles
     throttleNotice: null,   // Active notice displayed in Floating HUD and Popup
-    throttleNoticeTimeout: null
+    throttleNoticeTimeout: null,
+    autoCycleTabs: true,    // Rotates active tab focus across workers so Chromium doesn't throttle background videos
+    cycleIntervalSec: 7,    // Seconds to spend on each tab before rotating
+    cycleIncludeMaster: true // Include Master Overview tab in the rotation
 };
 
 let isDispatchingWorkers = false;
 const initializedWorkerTabIds = new Set();
+
+let tabCyclerTimer = null;
+let currentCycleIndex = 0;
+
+function startTabCycler() {
+    stopTabCycler();
+    if (!pathOrchestrator.isRunning || !pathOrchestrator.autoCycleTabs) return;
+
+    const runCycleStep = async () => {
+        if (!pathOrchestrator.isRunning || !pathOrchestrator.autoCycleTabs) {
+            stopTabCycler();
+            return;
+        }
+
+        const activeWorkerTabIds = Array.from(pathOrchestrator.activeWorkers.keys());
+        if (activeWorkerTabIds.length === 0) {
+            tabCyclerTimer = setTimeout(runCycleStep, 3000);
+            return;
+        }
+
+        // Build list of tabs to rotate through
+        const rotationTabs = [...activeWorkerTabIds];
+        if (pathOrchestrator.cycleIncludeMaster && pathOrchestrator.overviewTabId) {
+            rotationTabs.push(pathOrchestrator.overviewTabId);
+        }
+
+        if (rotationTabs.length <= 1) {
+            try {
+                const targetTabId = rotationTabs[0];
+                const tab = await chrome.tabs.get(targetTabId);
+                if (tab && !tab.active) {
+                    await chrome.tabs.update(targetTabId, { active: true });
+                }
+            } catch(e) {}
+            tabCyclerTimer = setTimeout(runCycleStep, 4000);
+            return;
+        }
+
+        currentCycleIndex = currentCycleIndex % rotationTabs.length;
+        const targetTabId = rotationTabs[currentCycleIndex];
+        currentCycleIndex = (currentCycleIndex + 1) % rotationTabs.length;
+
+        try {
+            const tab = await chrome.tabs.get(targetTabId);
+            if (tab && !tab.active) {
+                await chrome.tabs.update(targetTabId, { active: true });
+            }
+        } catch(e) {
+            // Tab might have closed
+        }
+
+        const intervalMs = Math.max(3, (pathOrchestrator.cycleIntervalSec || 7)) * 1000;
+        tabCyclerTimer = setTimeout(runCycleStep, intervalMs);
+    };
+
+    const intervalMs = Math.max(3, (pathOrchestrator.cycleIntervalSec || 7)) * 1000;
+    tabCyclerTimer = setTimeout(runCycleStep, intervalMs);
+}
+
+function stopTabCycler() {
+    if (tabCyclerTimer) {
+        clearTimeout(tabCyclerTimer);
+        tabCyclerTimer = null;
+    }
+}
 
 function getSerializablePathState() {
     return {
@@ -56,7 +124,9 @@ function getSerializablePathState() {
         totalCourses: pathOrchestrator.courses.length,
         completedCourses: pathOrchestrator.courses.filter(c => c.status === 'completed').length,
         smartConcurrency: pathOrchestrator.smartConcurrency,
-        throttleNotice: pathOrchestrator.throttleNotice || null
+        throttleNotice: pathOrchestrator.throttleNotice || null,
+        autoCycleTabs: pathOrchestrator.autoCycleTabs !== false,
+        cycleIntervalSec: pathOrchestrator.cycleIntervalSec || 7
     };
 }
 
@@ -93,9 +163,15 @@ function broadcastPathProgress() {
 }
 
 // Restore saved settings & active queue on service worker wake with live tab audit
-chrome.storage.local.get(['linkedinPathState', 'linkedinPathConcurrency', 'linkedinWorkerTabIds'], async (res) => {
+chrome.storage.local.get(['linkedinPathState', 'linkedinPathConcurrency', 'linkedinWorkerTabIds', 'linkedinAutoCycleTabs', 'linkedinCycleIntervalSec'], async (res) => {
     if (res.linkedinPathConcurrency) {
         pathOrchestrator.maxConcurrency = parseInt(res.linkedinPathConcurrency, 10) || 3;
+    }
+    if (res.linkedinAutoCycleTabs !== undefined) {
+        pathOrchestrator.autoCycleTabs = res.linkedinAutoCycleTabs;
+    }
+    if (res.linkedinCycleIntervalSec) {
+        pathOrchestrator.cycleIntervalSec = parseInt(res.linkedinCycleIntervalSec, 10) || 7;
     }
     if (res.linkedinPathState && res.linkedinPathState.isRunning) {
         pathOrchestrator.pathTitle = res.linkedinPathState.pathTitle || "";
@@ -104,6 +180,12 @@ chrome.storage.local.get(['linkedinPathState', 'linkedinPathConcurrency', 'linke
         pathOrchestrator.targetSpeed = res.linkedinPathState.targetSpeed || 16.0;
         pathOrchestrator.isRunning = true;
         pathOrchestrator.smartConcurrency = res.linkedinPathState.smartConcurrency !== false;
+        if (res.linkedinPathState.autoCycleTabs !== undefined) {
+            pathOrchestrator.autoCycleTabs = res.linkedinPathState.autoCycleTabs !== false;
+        }
+        if (res.linkedinPathState.cycleIntervalSec) {
+            pathOrchestrator.cycleIntervalSec = parseInt(res.linkedinPathState.cycleIntervalSec, 10) || 7;
+        }
         pathOrchestrator.activeWorkers = new Map();
 
         const storedWorkerMap = res.linkedinPathState.activeWorkerMap || [];
@@ -170,6 +252,10 @@ chrome.storage.local.get(['linkedinPathState', 'linkedinPathConcurrency', 'linke
 
         savePathState();
         broadcastPathProgress();
+
+        if (pathOrchestrator.autoCycleTabs) {
+            startTabCycler();
+        }
 
         // 5. Only dispatch if available slots exist
         if (pathOrchestrator.activeWorkers.size < pathOrchestrator.maxConcurrency) {
@@ -664,11 +750,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 smartConcurrency: true,
                 lastThrottleTime: 0,
                 throttleNotice: null,
-                throttleNoticeTimeout: null
+                throttleNoticeTimeout: null,
+                autoCycleTabs: pathOrchestrator.autoCycleTabs !== false,
+                cycleIntervalSec: pathOrchestrator.cycleIntervalSec || 7,
+                cycleIncludeMaster: true
             };
 
             savePathState();
             dispatchNextPathWorkers();
+            if (pathOrchestrator.autoCycleTabs) {
+                startTabCycler();
+            }
         });
 
         sendResponse({ status: "started", totalCourses: courses.length, maxConcurrency: concurrency });
@@ -677,6 +769,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === "get_learning_path_state") {
         sendResponse({ status: "ok", state: getSerializablePathState() });
+        return true;
+    }
+
+    if (request.action === "set_auto_cycle_tabs") {
+        pathOrchestrator.autoCycleTabs = !!request.enabled;
+        if (request.cycleIntervalSec) {
+            pathOrchestrator.cycleIntervalSec = parseInt(request.cycleIntervalSec, 10) || 7;
+        }
+        chrome.storage.local.set({ 
+            linkedinAutoCycleTabs: pathOrchestrator.autoCycleTabs,
+            linkedinCycleIntervalSec: pathOrchestrator.cycleIntervalSec
+        }).catch(() => {});
+
+        if (pathOrchestrator.autoCycleTabs && pathOrchestrator.isRunning) {
+            startTabCycler();
+        } else {
+            stopTabCycler();
+            if (pathOrchestrator.overviewTabId) {
+                chrome.tabs.update(pathOrchestrator.overviewTabId, { active: true }).catch(() => {});
+            }
+        }
+
+        savePathState();
+        broadcastPathProgress();
+        sendResponse({ status: "updated", autoCycleTabs: pathOrchestrator.autoCycleTabs });
         return true;
     }
 
@@ -734,6 +851,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (pathOrchestrator.throttleNoticeTimeout) {
             clearTimeout(pathOrchestrator.throttleNoticeTimeout);
             pathOrchestrator.throttleNoticeTimeout = null;
+        }
+        stopTabCycler();
+        if (pathOrchestrator.overviewTabId) {
+            chrome.tabs.update(pathOrchestrator.overviewTabId, { active: true }).catch(() => {});
         }
         // Close all active worker tabs and clean up
         closeAllOldWorkerTabs(pathOrchestrator.overviewTabId).then(() => {
@@ -797,8 +918,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         savePathState();
         broadcastPathProgress();
 
-        // Dispatch next course in the queue!
-        dispatchNextPathWorkers();
+        // Check if all courses in path are finished!
+        const allDone = pathOrchestrator.courses.every(c => c.status === 'completed');
+        if (allDone) {
+            pathOrchestrator.isRunning = false;
+            stopTabCycler();
+            if (pathOrchestrator.overviewTabId) {
+                chrome.tabs.update(pathOrchestrator.overviewTabId, { active: true }).catch(() => {});
+            }
+        } else {
+            // Dispatch next course in the queue!
+            dispatchNextPathWorkers();
+        }
 
         sendResponse({ status: "acknowledged" });
         return true;
@@ -1068,5 +1199,16 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
         // Dispatch next available course in queue
         dispatchNextPathWorkers();
+    }
+});
+
+// Nudge worker video playback upon tab activation
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    if (!pathOrchestrator.isRunning) return;
+    if (pathOrchestrator.activeWorkers.has(activeInfo.tabId)) {
+        chrome.tabs.sendMessage(activeInfo.tabId, {
+            action: "nudge_worker_video",
+            speed: pathOrchestrator.targetSpeed
+        }).catch(() => {});
     }
 });

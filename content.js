@@ -239,6 +239,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
     }
 
+    if (request.action === "nudge_worker_video") {
+        const vid = getLinkedInVideo();
+        if (vid) {
+            vid.muted = true;
+            vid.defaultMuted = true;
+            vid.volume = 0;
+            if (vid.paused && !vid.ended && !globalState.abortRequested) {
+                vid.play().catch(() => {});
+                triggerLinkedInNativePlay(vid);
+            }
+            if (request.speed) {
+                applyLinkedInSpeed(request.speed);
+            }
+        }
+        // If an Up Next countdown screen is showing, click Play Now immediately
+        const upNextBtn = document.querySelector('button[data-control-name="up_next_play"]');
+        if (upNextBtn && (upNextBtn.offsetParent !== null || upNextBtn.isConnected)) {
+            clickNativeElement(upNextBtn);
+        }
+        sendResponse({ status: "nudged" });
+        return true;
+    }
+
     if (request.action === "show_floating_hud") {
         createLinkedInFloatingHUD();
         chrome.storage.local.get(['linkedinPathState'], (res) => {
@@ -5954,6 +5977,7 @@ function renderMasterPageBanner(state = null) {
                         <span class="fcuk-banner-stat-pill" id="fcukBannerStatCourses">Courses: <strong>0/0 (0%)</strong></span>
                         <span class="fcuk-banner-stat-pill" id="fcukBannerStatWorkers">Workers: <strong>0 active</strong></span>
                         <span class="fcuk-banner-stat-pill" id="fcukBannerStatSpeed">Speed: <strong>16x Turbo</strong></span>
+                        <span class="fcuk-banner-stat-pill" id="fcukBannerStatCycler" style="cursor: pointer;" title="Toggle automatic active tab rotation so Chrome never throttles videos">Tab Cycler: <strong id="fcukBannerCyclerVal">ON (7s)</strong></span>
                     </div>
                 </div>
             </div>
@@ -5976,6 +6000,19 @@ function renderMasterPageBanner(state = null) {
 
         const startBtn = banner.querySelector('#fcukBannerStartBtn');
         const stopBtn = banner.querySelector('#fcukBannerStopBtn');
+        const cyclerPill = banner.querySelector('#fcukBannerStatCycler');
+
+        if (cyclerPill) {
+            cyclerPill.addEventListener('click', () => {
+                chrome.storage.local.get(['linkedinPathState'], (res) => {
+                    const currentAuto = res && res.linkedinPathState ? res.linkedinPathState.autoCycleTabs !== false : true;
+                    chrome.runtime.sendMessage({
+                        action: "set_auto_cycle_tabs",
+                        enabled: !currentAuto
+                    });
+                });
+            });
+        }
 
         if (startBtn) {
             startBtn.addEventListener('click', () => {
@@ -6018,6 +6055,13 @@ function renderMasterPageBanner(state = null) {
 
         const statSpeed = banner.querySelector('#fcukBannerStatSpeed');
         if (statSpeed && state.targetSpeed) statSpeed.innerHTML = `Speed: <strong>${state.targetSpeed}x Turbo</strong>`;
+
+        const cyclerVal = banner.querySelector('#fcukBannerCyclerVal');
+        if (cyclerVal) {
+            const isAuto = state.autoCycleTabs !== false;
+            cyclerVal.innerHTML = isAuto ? `ON (${state.cycleIntervalSec || 7}s)` : 'OFF';
+            cyclerVal.style.color = isAuto ? '#38bdf8' : '#94a3b8';
+        }
 
         const liveTag = banner.querySelector('#fcukBannerLiveTag');
         if (liveTag) {
@@ -6656,6 +6700,7 @@ function createLinkedInFloatingHUD() {
                 </div>
 
                 <div style="display: flex; align-items: center; gap: 4px;">
+                    <button class="hud-pill active" id="hudCyclerPill" style="font-size: 8.5px; padding: 2px 6px;" title="Automatic Tab Cycler: Rotates tabs so Chrome never throttles background videos">🔄 Cycle: ON</button>
                     <span style="font-size: 9px; color: #8e929e;">Speed:</span>
                     <select class="hud-speed-select" id="hudSpeedSelect">
                         <option value="16" selected>16x Turbo</option>
@@ -6852,6 +6897,29 @@ function attachHudControls(hud) {
         });
     }
 
+    // Tab Cycler toggle pill
+    const cyclerPill = hud.querySelector('#hudCyclerPill');
+    if (cyclerPill) {
+        cyclerPill.addEventListener('click', (e) => {
+            e.stopPropagation();
+            chrome.storage.local.get(['linkedinPathState'], (res) => {
+                const currentAuto = res && res.linkedinPathState ? res.linkedinPathState.autoCycleTabs !== false : true;
+                const newAuto = !currentAuto;
+                chrome.runtime.sendMessage({
+                    action: "set_auto_cycle_tabs",
+                    enabled: newAuto
+                });
+                if (newAuto) {
+                    cyclerPill.classList.add('active');
+                    cyclerPill.innerText = "🔄 Cycle: ON";
+                } else {
+                    cyclerPill.classList.remove('active');
+                    cyclerPill.innerText = "🔄 Cycle: OFF";
+                }
+            });
+        });
+    }
+
     // Start button
     const startBtn = hud.querySelector('#hudStartBtn');
     if (startBtn) {
@@ -7043,6 +7111,18 @@ function renderFloatingHudState(state) {
         speedSelect.value = String(state.targetSpeed);
     }
 
+    // Tab Cycler pill sync
+    const cyclerPill = hud.querySelector('#hudCyclerPill');
+    if (cyclerPill) {
+        if (state.autoCycleTabs !== false) {
+            cyclerPill.classList.add('active');
+            cyclerPill.innerText = `🔄 Cycle: ON (${state.cycleIntervalSec || 7}s)`;
+        } else {
+            cyclerPill.classList.remove('active');
+            cyclerPill.innerText = "🔄 Cycle: OFF";
+        }
+    }
+
     // Worker list rendering
     if (workerList && Array.isArray(state.courses)) {
         workerList.innerHTML = '';
@@ -7209,7 +7289,7 @@ function triggerLinkedInNativePlay(video) {
 
         for (const sel of playButtonSelectors) {
             const btn = document.querySelector(sel);
-            if (btn && btn.offsetParent !== null) {
+            if (btn && (btn.offsetParent !== null || btn.isConnected)) {
                 if (isAiChatbotElement(btn)) continue;
                 const label = (btn.getAttribute('aria-label') || '').toLowerCase();
                 if (!label.includes('autoplay') && !label.includes('pause')) {
@@ -7219,11 +7299,11 @@ function triggerLinkedInNativePlay(video) {
             }
         }
 
-        // Click the player overlay / video element to toggle playback
+        // Click the player overlay / video element to toggle playback only if video is paused
         const container = document.querySelector('.classroom-player') || 
                           document.querySelector('.video-player') ||
                           video;
-        if (container) {
+        if (container && (!video || video.paused)) {
             clickNativeElement(container);
             return true;
         }
@@ -8262,8 +8342,10 @@ async function advanceToNextLinkedInVideo() {
 
     // Check if on a quiz and skip it first
     if (await skipLinkedInQuizIfPresent()) {
-        return true;
+        return { advanced: true, targetHref: null };
     }
+
+    const currentUrl = window.location.href;
 
     const nextButtonSelectors = [
         'button[data-control-name="up_next_play"]',
@@ -8281,14 +8363,15 @@ async function advanceToNextLinkedInVideo() {
 
     for (const sel of nextButtonSelectors) {
         const btn = document.querySelector(sel);
-        if (btn && !btn.disabled && btn.offsetParent !== null) {
+        if (btn && !btn.disabled && (btn.offsetParent !== null || btn.isConnected)) {
             if (isAiChatbotElement(btn)) continue;
             log(`[LinkedIn] Triggering next video control...`);
             clickNativeElement(btn);
-            return true;
+            return { advanced: true, targetHref: null };
         }
     }
 
+    expandAllLinkedInChapters();
     const toc = scanLinkedInTOC();
     // Prioritize uncompleted videos (skipping all quizzes)
     const queue = (toc.uncompletedVideos && toc.uncompletedVideos.length > 0) 
@@ -8305,18 +8388,66 @@ async function advanceToNextLinkedInVideo() {
 
         if (targetItem && !isAiChatbotElement(targetItem.linkElement)) {
             log(`[LinkedIn] Selecting next lesson from syllabus: ${targetItem.title}`);
+            const targetHref = targetItem.href || (targetItem.linkElement ? targetItem.linkElement.getAttribute('href') : null);
+
             if (targetItem.linkElement) {
-                targetItem.linkElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                await new Promise(r => setTimeout(r, 200));
+                targetItem.linkElement.scrollIntoView({ behavior: 'auto', block: 'center' });
                 clickNativeElement(targetItem.linkElement);
-                return true;
-            } else if (targetItem.href) {
-                window.location.href = targetItem.href;
-                return true;
             }
+
+            // Direct URL Fallback: if React router does not navigate within 1.2s, hard-navigate!
+            if (targetHref) {
+                setTimeout(() => {
+                    if (window.location.href === currentUrl && !globalState.abortRequested) {
+                        log(`[LinkedIn] React router idle in background tab. Executing hard URL navigation to: ${targetHref}`, "info");
+                        window.location.href = targetHref;
+                    }
+                }, 1200);
+            }
+
+            return { advanced: true, targetHref: targetHref };
         }
     }
 
+    return { advanced: false, targetHref: null };
+}
+
+async function waitForNewLinkedInLesson(previousUrl, targetHref = null, maxWaitMs = 7000) {
+    const startTime = Date.now();
+    log("[LinkedIn] Awaiting new lesson stream to initialize...");
+
+    while (Date.now() - startTime < maxWaitMs) {
+        if (globalState.abortRequested) return false;
+
+        // 1. Has URL changed to the new lesson?
+        if (window.location.href !== previousUrl) {
+            log("[LinkedIn] ✓ Detected URL transition to next lesson.");
+            return true;
+        }
+
+        // 2. Has the video element reset with a fresh unended stream?
+        const video = getLinkedInVideo();
+        if (video) {
+            if (video.currentTime < 1.0 && !video.ended && video.readyState >= 1) {
+                log("[LinkedIn] ✓ Detected fresh video stream mounted.");
+                return true;
+            }
+        }
+
+        // 3. Fallback: if 2.5 seconds passed and URL still hasn't changed, hard-navigate!
+        if (targetHref && Date.now() - startTime > 2500) {
+            if (window.location.href === previousUrl && !globalState.abortRequested) {
+                log(`[LinkedIn] React router idle in background tab. Executing hard URL navigation to: ${targetHref}`, "info");
+                window.location.href = targetHref;
+                await new Promise(r => setTimeout(r, 2000));
+                return true;
+            }
+        }
+
+        await new Promise(r => setTimeout(r, 250));
+    }
+
+    log("[LinkedIn] Transition wait finished. Proceeding with video detection...", "warning");
     return false;
 }
 
@@ -8533,7 +8664,11 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
                 break;
             }
 
-            const advanced = await advanceToNextLinkedInVideo();
+            const previousUrl = window.location.href;
+            const advanceResult = await advanceToNextLinkedInVideo();
+            const advanced = typeof advanceResult === 'object' ? advanceResult.advanced : !!advanceResult;
+            const targetHref = typeof advanceResult === 'object' ? advanceResult.targetHref : null;
+
             if (!advanced) {
                 log("[LinkedIn] Advance button unavailable. Verifying course completion status before exiting...", "warning");
                 await new Promise(r => setTimeout(r, 1500));
@@ -8544,12 +8679,12 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
                 if (verifyToc.totalCount > 0 && verifyToc.uncompletedVideos.length > 0) {
                     log(`[LinkedIn] ⚠️ Found ${verifyToc.uncompletedVideos.length} remaining uncompleted lessons. Jumping directly...`, "warning");
                     const target = verifyToc.uncompletedVideos[0];
-                    if (target && target.linkElement) {
-                        clickNativeElement(target.linkElement);
+                    if (target && target.href) {
+                        window.location.href = target.href;
                         await new Promise(r => setTimeout(r, 2000));
                         continue;
-                    } else if (target && target.href) {
-                        window.location.href = target.href;
+                    } else if (target && target.linkElement) {
+                        clickNativeElement(target.linkElement);
                         await new Promise(r => setTimeout(r, 2000));
                         continue;
                     }
@@ -8579,7 +8714,9 @@ async function startLinkedInCourseCompletionProcess(options = {}) {
             }
 
             log("[LinkedIn] Loading next video lesson...");
-            await new Promise(r => setTimeout(r, 2000));
+            // Await actual video stream / URL change to avoid the stale video instant-finish loop!
+            await waitForNewLinkedInLesson(previousUrl, targetHref, 6000);
+
             // Proactively re-ensure video player mounted & re-inject main world speed
             await ensureLinkedInVideoPlayerMounted(6000);
             chrome.runtime.sendMessage({

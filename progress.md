@@ -2,6 +2,27 @@
 
 ## Session Summary (2026-09-29)
 
+- ✨ **Active Worker Tab Cycler & Unstoppable Background Video Progression (`background.js`, `content.js`, `popup.html`, `popup.js`)**:
+  - **Identified & Resolved 4 Interconnected Root Causes of Background Video Freezing**:
+    1. **Chromium Background Throttle & GPU Video Decoder Suspension**: In background tabs, Chromium throttles JS timers to 1s/1min and suspends `requestAnimationFrame` and video rendering if the tab is inaudible. Because turbo-speed videos are muted (`volume = 0`) to bypass Chromium's Autoplay restrictions, Chrome aggressively deprioritizes background media buffers.
+    2. **DOM `offsetParent === null` Visibility Trap in Unpainted Tabs**: In Chromium, background tabs that haven't performed a layout pass report `element.offsetParent === null` for all elements. The extension's previous visibility guards (`el.offsetParent !== null`) mistakenly rejected valid "Next", "Play", "Play now", and TOC links as hidden or nonexistent.
+    3. **React Router Synthetic Event Failures in Unfocused Tabs**: Triggering synthetic pointer/mouse events on React syllabus TOC links often failed to trigger a route transition when the window lacked OS-level focus.
+    4. **Stale `<video>` Element Instant-Finish Loops**: Immediately after clicking "Next", the previous video element remained in the DOM at `currentTime === duration` while the new stream buffered. The script mistakenly evaluated the old element, assumed the new video was already completed, and looped repeatedly.
+  - **Active Worker Tab Cycler / Rotator (`background.js`)**:
+    - Implemented `startTabCycler()` and `stopTabCycler()` with configurable interval (default: 7 seconds, `autoCycleTabs: true`).
+    - Sequentially cycles foreground tab activation (`chrome.tabs.update(tabId, { active: true })`) through all active worker tabs and the master overview tab.
+    - Grants each tab a recurring foreground execution window, instantly revitalizing Chromium's video decoders, network buffer pipelines, and timers.
+    - Added `chrome.tabs.onActivated` event listener that pushes a `nudge_worker_video` message to the activated worker tab, enforcing playback unpause, 16x turbo speed, and "Play now" CTA clicks on Up-Next screens.
+    - Added message handler for `set_auto_cycle_tabs` and persisted state to `chrome.storage.local` (`linkedinAutoCycleTabs`, `linkedinCycleIntervalSec`).
+  - **Direct URL Fallback & Lesson Handshake (`content.js`)**:
+    - Fixed `offsetParent === null` across `triggerLinkedInNativePlay`, `advanceToNextLinkedInVideo`, and TOC queries by allowing `(btn.offsetParent !== null || btn.isConnected)`.
+    - Added fallback direct navigation (`window.location.href = targetHref`) in `advanceToNextLinkedInVideo` if the React SPA URL does not change within 1.2s.
+    - Implemented `waitForNewLinkedInLesson(previousUrl, targetHref, maxWaitMs = 7000)` that polls until the URL changes or a fresh `<video>` element mounts with `currentTime < 1.0` and `video.ended === false`.
+  - **Real-Time Tab Cycler Controls across UI (`content.js`, `popup.html`, `popup.js`)**:
+    - In **Master Page Banner**: Added `#fcukBannerStatCycler` stat pill showing `🔄 Tab Cycler: ON (7s)` with live toggle on click.
+    - In **Floating HUD**: Added `#hudCyclerPill` (`.hud-cycler-pill`) allowing users to toggle tab cycling with one click.
+    - In **Extension Popup**: Added `#popupCyclerRow` with `#popupCyclerToggleBtn` under Learning Path controls, reflecting real-time state.
+
 - 🐛 **Fix Runaway Tab Accumulation & Enforce Background Video Playback (`background.js`, `content.js`)**:
   - **Eliminated Runaway Tab Spawning on Service Worker Wakeup (`background.js`)**:
     - **Root Cause**: Manifest V3 terminates idle service workers every ~30s. Upon wake-up, the storage restore listener previously reset all running courses to `queued`, cleared `activeWorkers`, and called `dispatchNextPathWorkers()`, opening a new batch of 3 tabs while previous worker tabs were still alive in Chrome.

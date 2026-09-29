@@ -80,6 +80,13 @@ The extension operates across two major educational platforms:
     - Added strict negative keyword filters in `scanLinkedInLearningPath` button expanders to prevent clicking action buttons ("Start course", "Resume course", "Start learning path").
     - Added guards in `ensureLinkedInVideoPlayerMounted` and `startLinkedInCourseCompletionProcess` to completely disable video mounting/playback on Master Pages.
     - Deprecated persistent `linkedinQueueRunning` in global storage, restricting course auto-resume strictly to tab-scoped `sessionStorage` and background worker assignments (`get_my_worker_course`).
+- [x] **Active Worker Tab Cycler & Background Video Progression (`background.js`, `content.js`, `popup.html`, `popup.js`)**:
+  - Automatically cycles foreground focus (`chrome.tabs.update(tabId, { active: true })`) among active worker tabs and the master overview tab every 7 seconds to keep Chromium timers, requestAnimationFrame, and media decoders unthrottled.
+  - Added `chrome.tabs.onActivated` listener in `background.js` dispatching `nudge_worker_video` to unpause, enforce 16x turbo speed, and trigger "Play now" on "Up Next" overlays.
+  - Fixed `offsetParent === null` trap in `triggerLinkedInNativePlay`, `advanceToNextLinkedInVideo`, and TOC queries where unpainted background tabs caused valid buttons and links to be rejected as invisible.
+  - Added direct URL fallback (`window.location.href = targetHref`) in `advanceToNextLinkedInVideo` if React SPA navigation does not trigger within 1.2s.
+  - Implemented `waitForNewLinkedInLesson` ensuring the DOM mounts a new URL or fresh `<video>` element (`currentTime < 1.0`) before evaluating completion, preventing stale video instant-finish loops.
+  - Added real-time Tab Cycler toggle and status indicator across Extension Popup (`#popupCyclerToggleBtn`), Master Page Banner (`#fcukBannerStatCycler`), and Floating HUD (`#hudCyclerPill`).
 - [x] **Page-Specific Context Across Extension Popup & Floating HUD**:
   - **Master Page**: Shows Master Orchestrator controls, Relax banner, full curriculum tray, and concurrency controls.
   - **Worker Tab**: Shows `[Worker Tab]` tag, active worker status syncing to Master tab, lesson progress (`[5/14]`), and single-worker stop option.

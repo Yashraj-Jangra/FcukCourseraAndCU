@@ -559,6 +559,44 @@ function renderPathWorkerState(state) {
             }
         });
     }
+
+    // Sync Tab Cycler button
+    const cyclerBtn = document.getElementById('popupCyclerToggleBtn');
+    if (cyclerBtn) {
+        if (state.autoCycleTabs !== false) {
+            cyclerBtn.style.background = '#0284c7';
+            cyclerBtn.style.borderColor = '#38bdf8';
+            cyclerBtn.innerText = `ON (${state.cycleIntervalSec || 7}s)`;
+        } else {
+            cyclerBtn.style.background = 'rgba(255,255,255,0.1)';
+            cyclerBtn.style.borderColor = 'rgba(255,255,255,0.2)';
+            cyclerBtn.innerText = 'OFF';
+        }
+    }
+}
+
+// Tab Cycler Toggle Button Listener
+const popupCyclerToggleBtn = document.getElementById('popupCyclerToggleBtn');
+if (popupCyclerToggleBtn) {
+    popupCyclerToggleBtn.addEventListener('click', () => {
+        chrome.storage.local.get(['linkedinPathState'], (res) => {
+            const currentAuto = res && res.linkedinPathState ? res.linkedinPathState.autoCycleTabs !== false : true;
+            const newAuto = !currentAuto;
+            chrome.runtime.sendMessage({
+                action: "set_auto_cycle_tabs",
+                enabled: newAuto
+            });
+            if (newAuto) {
+                popupCyclerToggleBtn.style.background = '#0284c7';
+                popupCyclerToggleBtn.style.borderColor = '#38bdf8';
+                popupCyclerToggleBtn.innerText = 'ON';
+            } else {
+                popupCyclerToggleBtn.style.background = 'rgba(255,255,255,0.1)';
+                popupCyclerToggleBtn.style.borderColor = 'rgba(255,255,255,0.2)';
+                popupCyclerToggleBtn.innerText = 'OFF';
+            }
+        });
+    });
 }
 
 // Concurrency Selector (Pills 1 - 5, default 3)

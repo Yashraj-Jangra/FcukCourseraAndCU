@@ -87,6 +87,10 @@ The extension operates across two major educational platforms:
   - Added direct URL fallback (`window.location.href = targetHref`) in `advanceToNextLinkedInVideo` if React SPA navigation does not trigger within 1.2s.
   - Implemented `waitForNewLinkedInLesson` ensuring the DOM mounts a new URL or fresh `<video>` element (`currentTime < 1.0`) before evaluating completion, preventing stale video instant-finish loops.
   - Added real-time Tab Cycler toggle and status indicator across Extension Popup (`#popupCyclerToggleBtn`), Master Page Banner (`#fcukBannerStatCycler`), and Floating HUD (`#hudCyclerPill`).
+- [x] **HUD Layout Isolation & Concurrency/Cycler State Independence (`content.js`, `popup.html`, `popup.js`)**:
+  - Eliminated UI overlap by moving the Tab Cycler into its own dedicated row (`.hud-cycler-row`) with compact `flex-shrink: 0; white-space: nowrap;` styling, giving both Concurrency tabs and Tab Cycler plenty of breathing room.
+  - Separated concurrency pills (`.hud-conc-pill`) from cycler button (`.hud-cycler-btn`), ending class collisions where clicking tabs altered the cycler or clicking cycler reset tabs to 3.
+  - Fixed popup state initialization to read and preserve user storage preferences (`linkedinPathConcurrency`, `linkedinAutoCycleTabs`) without clobbering states with hardcoded defaults during rescans.
 - [x] **Page-Specific Context Across Extension Popup & Floating HUD**:
   - **Master Page**: Shows Master Orchestrator controls, Relax banner, full curriculum tray, and concurrency controls.
   - **Worker Tab**: Shows `[Worker Tab]` tag, active worker status syncing to Master tab, lesson progress (`[5/14]`), and single-worker stop option.

@@ -2,6 +2,19 @@
 
 ## Session Summary (2026-09-29)
 
+- 🎨 **Fix HUD Tab Cycler Overflow & Decouple Concurrency vs. Cycler Option States (`content.js`, `popup.html`, `popup.js`)**:
+  - **HUD Overlap Elimination (`content.js`)**:
+    - **Root Cause**: Concurrency pills (`Tabs: [1][2][3][4][5] ⚡ Smart`), Tab Cycler (`🔄 Cycle: ON (7s)`), and Speed selector (`Speed: 16x Turbo`) were all packed into a single 330px `.hud-controls-row`, forcing the Tab Cycler button to overflow and overlap adjacent controls.
+    - **Solution**: Separated controls into two clean, structured rows:
+      - Row 1: Concurrency pills (`Tabs: [1][2][3][4][5] ⚡ Smart`) and Speed selector (`Speed: 16x Turbo`).
+      - Row 2: Dedicated Tab Cycler field (`.hud-cycler-row`) with icon, title, description, and compact `[ON (7s)]` / `[OFF]` toggle button styled with `flex-shrink: 0; white-space: nowrap;`.
+  - **Pill Class Collision & State Mutual Destruction (`content.js`)**:
+    - **Root Cause**: `#hudCyclerPill` was assigned class `.hud-pill`. When any concurrency tab (1-5) was clicked, `pills.forEach(p => p.classList.remove('active'))` stripped `.active` from the cycler button. Conversely, clicking the cycler button fired the concurrency click handler on itself, resetting concurrency to `3` (`parseInt(null) || 3`) and stripping `.active` from the user's tab pill.
+    - **Solution**: Isolated concurrency pills to `.hud-conc-pill` inside `#hudConcurrencyPills` and the cycler toggle to `.hud-cycler-btn` on `#hudCyclerPill`. The two controls now maintain completely independent DOM classes, click listeners, and visual states.
+  - **State Preservation Across Popup Rescans (`popup.js`, `popup.html`)**:
+    - Eliminated hardcoded `{ maxConcurrency: 3 }` calls in `renderPathWorkerState`, ensuring user-selected tab concurrency and cycler preferences from `chrome.storage.local` (`linkedinPathConcurrency`, `linkedinAutoCycleTabs`) are preserved and respected across scans and popup opens.
+    - Added `flex-shrink: 0`, `min-width: 0`, and `text-overflow: ellipsis` on `#popupCyclerRow` in `popup.html` to eliminate overflow on compact displays.
+
 - ✨ **Active Worker Tab Cycler & Unstoppable Background Video Progression (`background.js`, `content.js`, `popup.html`, `popup.js`)**:
   - **Identified & Resolved 4 Interconnected Root Causes of Background Video Freezing**:
     1. **Chromium Background Throttle & GPU Video Decoder Suspension**: In background tabs, Chromium throttles JS timers to 1s/1min and suspends `requestAnimationFrame` and video rendering if the tab is inaudible. Because turbo-speed videos are muted (`volume = 0`) to bypass Chromium's Autoplay restrictions, Chrome aggressively deprioritizes background media buffers.

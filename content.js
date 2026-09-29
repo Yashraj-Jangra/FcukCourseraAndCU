@@ -6462,11 +6462,16 @@ function createLinkedInFloatingHUD() {
                 justify-content: space-between;
                 gap: 6px;
             }
-            .hud-pill-group {
+            .hud-row-label {
+                font-size: 9px;
+                color: #8e929e;
+                font-weight: 500;
+            }
+            .hud-conc-group {
                 display: flex;
                 gap: 3px;
             }
-            .hud-pill {
+            .hud-conc-pill {
                 min-width: 20px;
                 height: 19px;
                 padding: 0 4px;
@@ -6480,15 +6485,73 @@ function createLinkedInFloatingHUD() {
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                transition: all 0.12s ease;
             }
-            .hud-pill:hover {
+            .hud-conc-pill:hover {
                 color: #ffffff;
                 border-color: rgba(255, 255, 255, 0.25);
             }
-            .hud-pill.active {
+            .hud-conc-pill.active {
                 background: #0284c7;
                 border-color: #0284c7;
                 color: #ffffff;
+            }
+            .hud-cycler-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                background: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 6px;
+                padding: 5px 8px;
+            }
+            .hud-cycler-info {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                min-width: 0;
+            }
+            .hud-cycler-icon {
+                font-size: 11px;
+                flex-shrink: 0;
+            }
+            .hud-cycler-title {
+                font-size: 9.5px;
+                font-weight: 600;
+                color: #e2e8f0;
+                line-height: 1.2;
+            }
+            .hud-cycler-desc {
+                font-size: 8.5px;
+                color: #8e929e;
+                line-height: 1.2;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .hud-cycler-btn {
+                flex-shrink: 0;
+                padding: 2px 8px;
+                font-size: 9px;
+                font-weight: 700;
+                border-radius: 4px;
+                cursor: pointer;
+                background: rgba(255, 255, 255, 0.07);
+                border: 1px solid rgba(255, 255, 255, 0.16);
+                color: #94a3b8;
+                transition: all 0.12s ease;
+                white-space: nowrap;
+            }
+            .hud-cycler-btn:hover {
+                color: #ffffff;
+                border-color: rgba(255, 255, 255, 0.35);
+            }
+            .hud-cycler-btn.active {
+                background: #0284c7;
+                border-color: #38bdf8;
+                color: #ffffff;
+                box-shadow: 0 0 8px rgba(2, 132, 199, 0.3);
             }
             .hud-speed-select {
                 background: rgba(255, 255, 255, 0.06);
@@ -6687,21 +6750,20 @@ function createLinkedInFloatingHUD() {
 
             <!-- Controls Row: Concurrency + Speed -->
             <div class="hud-controls-row" id="hudConcurrencyRow">
-                <div style="display: flex; align-items: center; gap: 4px;">
-                    <span style="font-size: 9px; color: #8e929e;">Tabs:</span>
-                    <div class="hud-pill-group" id="hudConcurrencyPills">
-                        <button class="hud-pill" data-conc="1">1</button>
-                        <button class="hud-pill" data-conc="2">2</button>
-                        <button class="hud-pill active" data-conc="3">3</button>
-                        <button class="hud-pill" data-conc="4">4</button>
-                        <button class="hud-pill" data-conc="5">5</button>
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <span class="hud-row-label">Tabs:</span>
+                    <div class="hud-conc-group" id="hudConcurrencyPills">
+                        <button class="hud-conc-pill" data-conc="1">1</button>
+                        <button class="hud-conc-pill" data-conc="2">2</button>
+                        <button class="hud-conc-pill active" data-conc="3">3</button>
+                        <button class="hud-conc-pill" data-conc="4">4</button>
+                        <button class="hud-conc-pill" data-conc="5">5</button>
                     </div>
                     <span class="hud-smart-badge" id="hudSmartBadge" title="Smart Parallel Tabs active: automatically throttles tabs if video buffering occurs">⚡ Smart</span>
                 </div>
 
                 <div style="display: flex; align-items: center; gap: 4px;">
-                    <button class="hud-pill active" id="hudCyclerPill" style="font-size: 8.5px; padding: 2px 6px;" title="Automatic Tab Cycler: Rotates tabs so Chrome never throttles background videos">🔄 Cycle: ON</button>
-                    <span style="font-size: 9px; color: #8e929e;">Speed:</span>
+                    <span class="hud-row-label">Speed:</span>
                     <select class="hud-speed-select" id="hudSpeedSelect">
                         <option value="16" selected>16x Turbo</option>
                         <option value="8">8x Ultra</option>
@@ -6709,6 +6771,18 @@ function createLinkedInFloatingHUD() {
                         <option value="2">2x Native</option>
                     </select>
                 </div>
+            </div>
+
+            <!-- Tab Cycler Row: Dedicated Field -->
+            <div class="hud-cycler-row" id="hudCyclerRow">
+                <div class="hud-cycler-info">
+                    <span class="hud-cycler-icon">🔄</span>
+                    <div style="display: flex; flex-direction: column; min-width: 0;">
+                        <span class="hud-cycler-title">Tab Cycler</span>
+                        <span class="hud-cycler-desc">Rotates tabs so videos never freeze in background</span>
+                    </div>
+                </div>
+                <button class="hud-cycler-btn active" id="hudCyclerPill" title="Toggle automatic active tab rotation so Chrome never throttles videos">ON (7s)</button>
             </div>
 
             <!-- Start Button (Shown when Idle) -->
@@ -6722,8 +6796,8 @@ function createLinkedInFloatingHUD() {
     document.body.appendChild(hud);
     floatingHudEl = hud;
 
-    // Restore saved position & minimized state
-    chrome.storage.local.get(['fcukHudPosition', 'fcukHudCollapsed'], (res) => {
+    // Restore saved position, minimized state, and control preferences
+    chrome.storage.local.get(['fcukHudPosition', 'fcukHudCollapsed', 'linkedinPathConcurrency', 'linkedinAutoCycleTabs', 'linkedinCycleIntervalSec', 'linkedinTargetSpeed', 'linkedinPathState'], (res) => {
         if (res.fcukHudPosition) {
             hud.style.left = `${res.fcukHudPosition.x}px`;
             hud.style.top = `${res.fcukHudPosition.y}px`;
@@ -6732,6 +6806,36 @@ function createLinkedInFloatingHUD() {
         }
         if (res.fcukHudCollapsed) {
             hud.classList.add('minimized');
+        }
+
+        const conc = parseInt(res.linkedinPathConcurrency, 10) || (res.linkedinPathState && res.linkedinPathState.maxConcurrency) || 3;
+        const autoCycle = res.linkedinAutoCycleTabs !== undefined ? res.linkedinAutoCycleTabs : (res.linkedinPathState ? res.linkedinPathState.autoCycleTabs !== false : true);
+        const interval = parseInt(res.linkedinCycleIntervalSec, 10) || (res.linkedinPathState && res.linkedinPathState.cycleIntervalSec) || 7;
+        const speed = parseFloat(res.linkedinTargetSpeed) || (res.linkedinPathState && res.linkedinPathState.targetSpeed) || 16.0;
+
+        const concPills = hud.querySelectorAll('#hudConcurrencyPills .hud-conc-pill');
+        concPills.forEach(p => {
+            if (parseInt(p.getAttribute('data-conc'), 10) === conc) {
+                p.classList.add('active');
+            } else {
+                p.classList.remove('active');
+            }
+        });
+
+        const cyclerBtn = hud.querySelector('#hudCyclerPill');
+        if (cyclerBtn) {
+            if (autoCycle) {
+                cyclerBtn.classList.add('active');
+                cyclerBtn.innerText = `ON (${interval}s)`;
+            } else {
+                cyclerBtn.classList.remove('active');
+                cyclerBtn.innerText = "OFF";
+            }
+        }
+
+        const speedSelect = hud.querySelector('#hudSpeedSelect');
+        if (speedSelect) {
+            speedSelect.value = String(speed);
         }
     });
 
@@ -6874,13 +6978,14 @@ function attachHudControls(hud) {
     }
 
     // Concurrency pills
-    const pills = hud.querySelectorAll('.hud-pill');
-    pills.forEach(p => {
+    const concPills = hud.querySelectorAll('#hudConcurrencyPills .hud-conc-pill');
+    concPills.forEach(p => {
         p.addEventListener('click', (e) => {
             e.stopPropagation();
-            pills.forEach(pill => pill.classList.remove('active'));
+            concPills.forEach(pill => pill.classList.remove('active'));
             p.classList.add('active');
             const conc = parseInt(p.getAttribute('data-conc'), 10) || 3;
+            chrome.storage.local.set({ linkedinPathConcurrency: conc });
             chrome.runtime.sendMessage({ action: "set_path_concurrency", concurrency: conc }).catch(() => {});
         });
     });
@@ -6897,13 +7002,15 @@ function attachHudControls(hud) {
         });
     }
 
-    // Tab Cycler toggle pill
+    // Tab Cycler toggle button
     const cyclerPill = hud.querySelector('#hudCyclerPill');
     if (cyclerPill) {
         cyclerPill.addEventListener('click', (e) => {
             e.stopPropagation();
-            chrome.storage.local.get(['linkedinPathState'], (res) => {
-                const currentAuto = res && res.linkedinPathState ? res.linkedinPathState.autoCycleTabs !== false : true;
+            chrome.storage.local.get(['linkedinPathState', 'linkedinAutoCycleTabs'], (res) => {
+                const currentAuto = res && res.linkedinPathState && res.linkedinPathState.autoCycleTabs !== undefined
+                    ? res.linkedinPathState.autoCycleTabs
+                    : (res && res.linkedinAutoCycleTabs !== undefined ? res.linkedinAutoCycleTabs : true);
                 const newAuto = !currentAuto;
                 chrome.runtime.sendMessage({
                     action: "set_auto_cycle_tabs",
@@ -6911,10 +7018,10 @@ function attachHudControls(hud) {
                 });
                 if (newAuto) {
                     cyclerPill.classList.add('active');
-                    cyclerPill.innerText = "🔄 Cycle: ON";
+                    cyclerPill.innerText = "ON (7s)";
                 } else {
                     cyclerPill.classList.remove('active');
-                    cyclerPill.innerText = "🔄 Cycle: OFF";
+                    cyclerPill.innerText = "OFF";
                 }
             });
         });
@@ -6934,7 +7041,7 @@ function attachHudControls(hud) {
                     setTimeout(() => { startBtn.innerText = "▶️ Start Learning Path"; startBtn.disabled = false; }, 2000);
                     return;
                 }
-                const activePill = hud.querySelector('.hud-pill.active');
+                const activePill = hud.querySelector('#hudConcurrencyPills .hud-conc-pill.active');
                 const concurrency = activePill ? parseInt(activePill.getAttribute('data-conc'), 10) || 3 : 3;
                 const speedSelect = hud.querySelector('#hudSpeedSelect');
                 const speed = speedSelect ? parseFloat(speedSelect.value) || 16.0 : 16.0;
@@ -7096,8 +7203,8 @@ function renderFloatingHudState(state) {
 
     // Concurrency pills sync
     if (state.maxConcurrency) {
-        const pills = hud.querySelectorAll('.hud-pill');
-        pills.forEach(p => {
+        const concPills = hud.querySelectorAll('#hudConcurrencyPills .hud-conc-pill');
+        concPills.forEach(p => {
             if (parseInt(p.getAttribute('data-conc'), 10) === state.maxConcurrency) {
                 p.classList.add('active');
             } else {
@@ -7116,10 +7223,10 @@ function renderFloatingHudState(state) {
     if (cyclerPill) {
         if (state.autoCycleTabs !== false) {
             cyclerPill.classList.add('active');
-            cyclerPill.innerText = `🔄 Cycle: ON (${state.cycleIntervalSec || 7}s)`;
+            cyclerPill.innerText = `ON (${state.cycleIntervalSec || 7}s)`;
         } else {
             cyclerPill.classList.remove('active');
-            cyclerPill.innerText = "🔄 Cycle: OFF";
+            cyclerPill.innerText = "OFF";
         }
     }
 

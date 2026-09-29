@@ -548,7 +548,7 @@ function renderPathWorkerState(state) {
         }
     }
 
-    // Sync active concurrency pill with state
+    // Sync active concurrency pill with state (only if maxConcurrency is explicitly provided)
     if (state.maxConcurrency) {
         const pills = document.querySelectorAll('.concurrency-pill');
         pills.forEach(p => {
@@ -562,8 +562,8 @@ function renderPathWorkerState(state) {
 
     // Sync Tab Cycler button
     const cyclerBtn = document.getElementById('popupCyclerToggleBtn');
-    if (cyclerBtn) {
-        if (state.autoCycleTabs !== false) {
+    if (cyclerBtn && state.autoCycleTabs !== undefined) {
+        if (state.autoCycleTabs) {
             cyclerBtn.style.background = '#0284c7';
             cyclerBtn.style.borderColor = '#38bdf8';
             cyclerBtn.innerText = `ON (${state.cycleIntervalSec || 7}s)`;
@@ -579,8 +579,10 @@ function renderPathWorkerState(state) {
 const popupCyclerToggleBtn = document.getElementById('popupCyclerToggleBtn');
 if (popupCyclerToggleBtn) {
     popupCyclerToggleBtn.addEventListener('click', () => {
-        chrome.storage.local.get(['linkedinPathState'], (res) => {
-            const currentAuto = res && res.linkedinPathState ? res.linkedinPathState.autoCycleTabs !== false : true;
+        chrome.storage.local.get(['linkedinPathState', 'linkedinAutoCycleTabs'], (res) => {
+            const currentAuto = res && res.linkedinPathState && res.linkedinPathState.autoCycleTabs !== undefined
+                ? res.linkedinPathState.autoCycleTabs
+                : (res && res.linkedinAutoCycleTabs !== undefined ? res.linkedinAutoCycleTabs : true);
             const newAuto = !currentAuto;
             chrome.runtime.sendMessage({
                 action: "set_auto_cycle_tabs",
@@ -589,7 +591,7 @@ if (popupCyclerToggleBtn) {
             if (newAuto) {
                 popupCyclerToggleBtn.style.background = '#0284c7';
                 popupCyclerToggleBtn.style.borderColor = '#38bdf8';
-                popupCyclerToggleBtn.innerText = 'ON';
+                popupCyclerToggleBtn.innerText = 'ON (7s)';
             } else {
                 popupCyclerToggleBtn.style.background = 'rgba(255,255,255,0.1)';
                 popupCyclerToggleBtn.style.borderColor = 'rgba(255,255,255,0.2)';
@@ -631,13 +633,19 @@ if (linkedinStartPathBtn) {
                         const remaining = (freshCtx.totalCourses || 0) - (freshCtx.completedCourses || 0);
                         const subEl = document.getElementById('linkedinContextSub');
                         if (subEl) subEl.innerText = `${freshCtx.totalCourses || 0} items • ${freshCtx.completedCourses || 0} completed • ${remaining} remaining`;
-                        renderPathWorkerState({
-                            isRunning: false,
-                            courses: freshCtx.courses,
-                            totalCourses: freshCtx.totalCourses,
-                            completedCourses: freshCtx.completedCourses,
-                            maxConcurrency: 3,
-                            activeWorkerCount: 0
+                        const activeConcPill = document.querySelector('.concurrency-pill.active');
+                        const currentConc = activeConcPill ? parseInt(activeConcPill.getAttribute('data-concurrency'), 10) || 3 : 3;
+                        chrome.storage.local.get(['linkedinAutoCycleTabs', 'linkedinCycleIntervalSec'], (cRes) => {
+                            renderPathWorkerState({
+                                isRunning: false,
+                                courses: freshCtx.courses,
+                                totalCourses: freshCtx.totalCourses,
+                                completedCourses: freshCtx.completedCourses,
+                                maxConcurrency: currentConc,
+                                autoCycleTabs: cRes.linkedinAutoCycleTabs !== undefined ? cRes.linkedinAutoCycleTabs : true,
+                                cycleIntervalSec: parseInt(cRes.linkedinCycleIntervalSec, 10) || 7,
+                                activeWorkerCount: 0
+                            });
                         });
                     }
                 } catch(e) {}
@@ -893,9 +901,12 @@ document.getElementById('readBtn').addEventListener('click', async () => {
         }
         document.getElementById('status').innerText = "Ready on LinkedIn Learning";
 
-        // Restore saved concurrency preference
-        chrome.storage.local.get(['linkedinPathConcurrency'], (res) => {
-            const targetConc = parseInt(res.linkedinPathConcurrency, 10) || 3;
+        // Restore saved concurrency & cycler preferences
+        chrome.storage.local.get(['linkedinPathConcurrency', 'linkedinAutoCycleTabs', 'linkedinCycleIntervalSec', 'linkedinPathState'], (res) => {
+            const targetConc = parseInt(res.linkedinPathConcurrency, 10) || (res.linkedinPathState && res.linkedinPathState.maxConcurrency) || 3;
+            const targetAuto = res.linkedinAutoCycleTabs !== undefined ? res.linkedinAutoCycleTabs : (res.linkedinPathState ? res.linkedinPathState.autoCycleTabs !== false : true);
+            const targetInterval = parseInt(res.linkedinCycleIntervalSec, 10) || (res.linkedinPathState && res.linkedinPathState.cycleIntervalSec) || 7;
+
             const pills = document.querySelectorAll('.concurrency-pill');
             pills.forEach(p => {
                 if (parseInt(p.getAttribute('data-concurrency'), 10) === targetConc) {
@@ -904,6 +915,19 @@ document.getElementById('readBtn').addEventListener('click', async () => {
                     p.classList.remove('active');
                 }
             });
+
+            const cyclerBtn = document.getElementById('popupCyclerToggleBtn');
+            if (cyclerBtn) {
+                if (targetAuto) {
+                    cyclerBtn.style.background = '#0284c7';
+                    cyclerBtn.style.borderColor = '#38bdf8';
+                    cyclerBtn.innerText = `ON (${targetInterval}s)`;
+                } else {
+                    cyclerBtn.style.background = 'rgba(255,255,255,0.1)';
+                    cyclerBtn.style.borderColor = 'rgba(255,255,255,0.2)';
+                    cyclerBtn.innerText = 'OFF';
+                }
+            }
         });
 
         // Query active tab context (Learning Path vs Single Course vs Worker Tab) with auto-retry
@@ -944,13 +968,19 @@ document.getElementById('readBtn').addEventListener('click', async () => {
                     if (switchBtn) switchBtn.style.display = 'none';
 
                     // Initial render of detected courses list in tray
-                    renderPathWorkerState({
-                        isRunning: activePathRunning,
-                        courses: ctx.courses,
-                        totalCourses: ctx.totalCourses,
-                        completedCourses: ctx.completedCourses,
-                        maxConcurrency: 3,
-                        activeWorkerCount: 0
+                    const activeConcPill = document.querySelector('.concurrency-pill.active');
+                    const currentConc = activeConcPill ? parseInt(activeConcPill.getAttribute('data-concurrency'), 10) || 3 : 3;
+                    chrome.storage.local.get(['linkedinAutoCycleTabs', 'linkedinCycleIntervalSec'], (cRes) => {
+                        renderPathWorkerState({
+                            isRunning: activePathRunning,
+                            courses: ctx.courses,
+                            totalCourses: ctx.totalCourses,
+                            completedCourses: ctx.completedCourses,
+                            maxConcurrency: currentConc,
+                            autoCycleTabs: cRes.linkedinAutoCycleTabs !== undefined ? cRes.linkedinAutoCycleTabs : true,
+                            cycleIntervalSec: parseInt(cRes.linkedinCycleIntervalSec, 10) || 7,
+                            activeWorkerCount: 0
+                        });
                     });
                 } else if (ctx.isWorkerTab) {
                     // Active Background Worker Tab
